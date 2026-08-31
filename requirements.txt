@@ -1,0 +1,13 @@
+# Canonical dependency list lives in pyproject.toml; this mirror exists for
+# `pip install -r requirements.txt` workflows. Python 3.12 only.
+mujoco>=3.2
+mink>=0.0.10
+mediapipe==0.10.35
+opencv-python>=4.10
+numpy>=1.26,<2.3
+torch>=2.5
+torchvision>=0.20
+einops>=0.8
+imageio[ffmpeg]>=2.35
+tqdm>=4.66
+rich>=13.9

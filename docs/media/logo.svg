@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="120" viewBox="0 0 560 120" role="img" aria-label="handrobot">
+  <style>
+    .hand  { font: 300 64px 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; fill: #8b949e; letter-spacing: 1px; }
+    .robot { font: 800 64px 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; fill: #2ea87e; letter-spacing: 1px; }
+    .tag   { font: 400 15px 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; fill: #8b949e; letter-spacing: 4px; }
+    .line  { stroke: #2ea87e; stroke-width: 3; fill: none; stroke-linecap: round; }
+  </style>
+  <text x="50%" y="62" text-anchor="middle"><tspan class="hand">hand</tspan><tspan class="robot">robot</tspan></text>
+  <path class="line" d="M 150 82 H 410"/>
+  <path class="line" d="M 396 74 L 410 82 L 396 90"/>
+  <text x="50%" y="112" text-anchor="middle" class="tag">YOUR HAND, A WEBCAM, A ROBOT THAT LEARNS</text>
+</svg>

@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Generated artefacts
+runs/
+assets/reach_table.npz
+assets/gripper_calibration.npz
+assets/models/*.task
+assets/cache/
+.remember/

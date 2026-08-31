@@ -1,0 +1,134 @@
+<mujoco model="handrobot_pickplace">
+  <include file="so101.xml"/>
+
+  <option timestep="0.0016666667" integrator="implicitfast" cone="elliptic" impratio="10"
+          iterations="20" ls_iterations="30"/>
+
+  <!-- Studio lighting and a clean, low-contrast set. The policy sees 128-pixel
+       crops of this, so the priority is that the cube and the bin stay clearly
+       separable from the table at that size; the second priority is that a
+       rendered video does not look like a physics demo. -->
+  <visual>
+    <headlight diffuse="0.34 0.34 0.36" ambient="0.36 0.36 0.39" specular="0.10 0.10 0.10"/>
+    <rgba haze="0.09 0.10 0.13 1"/>
+    <global azimuth="140" elevation="-24" offwidth="1920" offheight="1088"/>
+    <quality shadowsize="8192" offsamples="8"/>
+    <map znear="0.008" zfar="12" shadowclip="0.7" shadowscale="0.6" fogstart="2.5" fogend="6"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.13 0.145 0.185" rgb2="0.020 0.022 0.032"
+             width="512" height="3072"/>
+    <!-- A very quiet grain rather than a checkerboard: a checker pattern
+         dominates a 128-pixel image and gives a policy a strong, useless cue. -->
+    <texture type="2d" name="desk_tex" builtin="flat" mark="none"
+             rgb1="0.455 0.435 0.410" rgb2="0.455 0.435 0.410"
+             markrgb="0.5 0.5 0.5" random="0.006" width="1024" height="1024"/>
+    <material name="desk_mat" texture="desk_tex" texuniform="true" texrepeat="2 2"
+              reflectance="0.0" specular="0.12" shininess="0.28"/>
+    <material name="riser_mat" rgba="0.145 0.152 0.175 1" specular="0.10" shininess="0.15"/>
+    <material name="cube_mat" rgba="0.855 0.196 0.161 1" specular="0.42" shininess="0.55"/>
+    <material name="bin_wall_mat" rgba="0.106 0.392 0.760 1" specular="0.36" shininess="0.45"/>
+    <material name="bin_floor_mat" rgba="0.078 0.302 0.596 1" specular="0.22" shininess="0.30"/>
+    <material name="backdrop_mat" rgba="0.115 0.125 0.155 1" specular="0.02" shininess="0.02"/>
+  </asset>
+
+  <worldbody>
+    <!-- Three-point lighting: a key that casts the shadow, a fill that keeps the
+         shadow readable, and a rim that separates the arm from the backdrop. -->
+    <light name="key"  pos="0.30  0.55 1.15" dir="-0.16 -0.42 -1" directional="false"
+           diffuse="0.50 0.49 0.47" specular="0.26 0.26 0.26" castshadow="true"
+           attenuation="1 0 0"/>
+    <light name="fill" pos="0.16 -0.72 0.78" dir="0.06 0.62 -0.78" directional="false"
+           diffuse="0.26 0.27 0.31" specular="0.03 0.03 0.03" castshadow="false"
+           attenuation="1 0 0"/>
+    <light name="rim"  pos="-0.42 0.05 0.62" dir="1 0 -0.55" directional="false"
+           diffuse="0.20 0.21 0.25" specular="0.10 0.10 0.10" castshadow="false"
+           attenuation="1 0 0"/>
+
+    <!-- Table top surface is exactly z = 0. Every height in the code is measured
+         from here, so this must not move. -->
+    <geom name="table" type="box" size="1.00 0.95 0.02" pos="0.30 0 -0.02"
+          material="desk_mat" friction="0.9 0.02 0.001" condim="3"/>
+    <!-- A dark riser under the base, so the arm reads as mounted rather than floating. -->
+    <geom name="base_riser" type="box" size="0.062 0.062 0.0015" pos="0 0 0.0015"
+          material="riser_mat" contype="0" conaffinity="0"/>
+    <!-- Backdrop wall, out of the arm's reach; it gives the renders a horizon. -->
+    <geom name="backdrop" type="box" size="0.02 1.10 0.55" pos="-0.42 0 0.55"
+          material="backdrop_mat" contype="0" conaffinity="0"/>
+
+    <!-- Where the operator should put the gripper next. A mocap body so it can
+         be moved every frame without touching the physics; drawn as a ring so
+         it reads as a target rather than as another object to pick up. -->
+    <body name="goal_marker" pos="0 0 -1" mocap="true">
+      <geom name="goal_ring" type="cylinder" size="0.020 0.003"
+            rgba="0.30 0.95 0.55 0.30" contype="0" conaffinity="0" group="1"/>
+      <geom name="goal_pip" type="cylinder" size="0.006 0.009"
+            rgba="0.30 0.95 0.55 0.55" contype="0" conaffinity="0" group="1"/>
+    </body>
+
+    <!-- Third-person chase rig: the eye rides above and behind the gripper and
+         the camera aims at the look point, which is pinned to the gripper every
+         frame. Purely visual (mocap, no contacts): the operator's main view
+         follows the hand, so the arm can never park itself in front of the
+         lens the way a fixed camera allows. Positioned on the operator's side
+         (+x) so left and right on screen stay the operator's left and right. -->
+    <body name="chase_look" pos="0.4 0 0.1" mocap="true">
+      <site name="chase_look" size="0.001" group="4" rgba="0 0 0 0"/>
+    </body>
+    <body name="chase_eye" pos="0.9 0 0.4" mocap="true">
+      <camera name="chase_cam" mode="targetbody" target="chase_look" fovy="55"/>
+    </body>
+
+    <!-- Aim points for the two scene cameras. The policy camera frames the
+         table; the hero camera frames the whole arm, so it aims higher. -->
+    <body name="workspace_anchor" pos="0.205 0 0.055" mocap="true">
+      <site name="workspace_anchor" size="0.002" group="4" rgba="0 0 0 0"/>
+    </body>
+    <body name="hero_anchor" pos="0.170 0 0.135" mocap="true">
+      <site name="hero_anchor" size="0.002" group="4" rgba="0 0 0 0"/>
+    </body>
+
+    <camera name="front_cam" pos="0.615 0.010 0.255" mode="targetbody"
+            target="workspace_anchor" fovy="55"/>
+    <camera name="hero_cam"  pos="0.640 0.470 0.330" mode="targetbody"
+            target="hero_anchor" fovy="43"/>
+    <!-- Straight down over the workspace. Judging how far the gripper is from
+         the cube along the camera's own view axis is impossible from a single
+         side view, which is what made teleoperation so hard; this makes the
+         horizontal alignment obvious. Left and right match front_cam. -->
+    <camera name="top_cam" pos="0.205 0 0.62" xyaxes="0 1 0  -1 0 0" fovy="42"/>
+
+    <!-- Manipulated cube. -->
+    <body name="cube" pos="0.21 0.09 0.0125">
+      <freejoint name="cube_free"/>
+      <inertial pos="0 0 0" mass="0.035" diaginertia="3.65e-6 3.65e-6 3.65e-6"/>
+      <geom name="cube" type="box" size="0.0125 0.0125 0.0125" material="cube_mat"
+            friction="1.1 0.02 0.001" condim="6" solref="0.008 1"/>
+    </body>
+
+    <!-- Drop target: an open-top bin, four walls on a floor. -->
+    <body name="bin" pos="0.21 -0.11 0.0">
+      <freejoint name="bin_free"/>
+      <inertial pos="0 0 0.012" mass="0.45" diaginertia="1.2e-3 1.2e-3 2.0e-3"/>
+      <geom name="bin_floor" type="box" size="0.045 0.045 0.004" pos="0 0 0.004"
+            material="bin_floor_mat" friction="1.0 0.02 0.001" condim="3"/>
+      <geom name="bin_wx1" type="box" size="0.004 0.045 0.018" pos=" 0.041 0 0.018"
+            material="bin_wall_mat"/>
+      <geom name="bin_wx2" type="box" size="0.004 0.045 0.018" pos="-0.041 0 0.018"
+            material="bin_wall_mat"/>
+      <geom name="bin_wy1" type="box" size="0.045 0.004 0.018" pos="0  0.041 0.018"
+            material="bin_wall_mat"/>
+      <geom name="bin_wy2" type="box" size="0.045 0.004 0.018" pos="0 -0.041 0.018"
+            material="bin_wall_mat"/>
+      <site name="bin_center" pos="0 0 0.02" size="0.005" group="4"/>
+    </body>
+  </worldbody>
+
+  <keyframe>
+    <!-- home: arm folded back and up, gripper open, clear of the whole workspace -->
+    <key name="home"
+         qpos="0 -1.57 1.57 0.9 0 0.9   0.21 0.09 0.0125 1 0 0 0   0.21 -0.11 0 1 0 0 0"
+         ctrl="0 -1.57 1.57 0.9 0 0.9"/>
+  </keyframe>
+</mujoco>

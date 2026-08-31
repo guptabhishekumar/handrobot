@@ -1,0 +1,26 @@
+<mujoco model="leap_mirror">
+  <include file="right_hand.xml"/>
+
+  <visual>
+    <headlight diffuse="0.35 0.35 0.37" ambient="0.38 0.38 0.42" specular="0.12 0.12 0.12"/>
+    <rgba haze="0.09 0.10 0.13 1"/>
+    <global azimuth="150" elevation="-25" offwidth="1280" offheight="720"/>
+    <quality shadowsize="4096" offsamples="8"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.13 0.145 0.185" rgb2="0.02 0.022 0.032"
+             width="512" height="1536"/>
+    <material name="stage" rgba="0.16 0.17 0.20 1" specular="0.05" shininess="0.1"/>
+  </asset>
+
+  <worldbody>
+    <light name="key" pos="0.35 0.35 0.75" dir="-0.3 -0.4 -1" directional="false"
+           diffuse="0.55 0.54 0.52" specular="0.25 0.25 0.25" castshadow="true"/>
+    <light name="fill" pos="0.1 -0.5 0.5" dir="0 0.6 -0.6" directional="false"
+           diffuse="0.28 0.28 0.32" castshadow="false"/>
+    <geom name="stage" type="box" size="0.6 0.6 0.02" pos="0.05 0 -0.05" material="stage"/>
+    <!-- Palm faces this camera; fingers point screen-up. -->
+    <camera name="mirror_cam" pos="0.02 -0.03 0.60" xyaxes="0 -1 0  1 0 0" fovy="40"/>
+  </worldbody>
+</mujoco>
