@@ -149,6 +149,20 @@ with closed-loop replanning when the puck veers), and the policy receives the
 task as a learned embedding. Conditioning is honest one-hot with language
 aliases, not an LLM - the README says exactly what the code does.
 
+**Measured** - one conditioned ACT policy, 14k steps on 480 scripted episodes,
+scored on 25 fresh layouts per task:
+
+| bin | push | lift | touch | overall |
+|---|---|---|---|---|
+| **100%** | **80%** | **100%** | **100%** | **95/100** |
+
+Push is the honest hard one - contact-rich, long-horizon, and the target is a
+ring on the table rather than a wall-sized bin. Its first score was 48%,
+because the ring was sampled outside the policy camera's frame and was
+near-invisible at 128 px anyway; making the target visible (and unpushable
+zones impossible) took it to 80%. That diagnosis-to-number chain is the
+project in miniature.
+
 ## Diffusion policy, for the ablation
 
 The second policy class, sharing ACT's observation encoder token for token, so
