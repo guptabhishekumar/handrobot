@@ -541,5 +541,15 @@ of value per effort:
 
 MIT (see `LICENSE`). The SO-101 and Franka Panda models under `assets/` and
 the LEAP hand model under `assets/leap/` are from
-[MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) and keeps
-its own licence, included alongside it.
+[MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) and keep
+their own licences, included alongside them.
+
+---
+
+<p align="center">
+  <br/>
+  <b><i>The hand was the first end effector.</i></b><br/>
+  <i>This repository just teaches the second one.</i>
+  <br/><br/>
+  <sub><a href="https://github.com/guptabhishekumar"><b>Abhishek Kumar Gupta</b></a></sub>
+</p>
