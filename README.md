@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-394%20passing-2e8b6e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-428%20passing-2e8b6e">
   <img alt="python" src="https://img.shields.io/badge/python-3.12-3776ab">
   <img alt="sim" src="https://img.shields.io/badge/sim-MuJoCo%203-orange">
   <img alt="policy" src="https://img.shields.io/badge/policy-ACT%20(from%20scratch)-8a2be2">
@@ -12,16 +12,20 @@
 </p>
 
 Teach a simulated robot arm to pick things up by waving your hand at your webcam.
+No robot, no gloves - one laptop camera, your bare hand, and an arm that learns
+the task from your demonstrations and then does it alone.
 
-No robot. No controller. No VR gloves. One laptop camera, your bare hand, and a
-simulated arm that learns to do the task on its own afterwards.
+<p align="center">
+  <b>95/100</b> multi-task unseen episodes &nbsp;·&nbsp;
+  <b>30 Hz</b> hand-to-joints &nbsp;·&nbsp;
+  <b>15.0 mm</b> neural fingertips vs a ≈14 mm physical ceiling &nbsp;·&nbsp;
+  <b>428</b> tests &nbsp;·&nbsp; <b>$0</b> hardware
+</p>
 
-Two arms are supported. A [Franka Panda](https://frankarobotics.com) is the
-default because teleoperating it is pleasant: seven joints mean it can hold a
-straight-down grasp anywhere in a workspace thirty times larger than the
-alternative. The [SO-101](https://github.com/TheRobotStudio/SO-ARM100) is there
-because it is the one you can buy for about £200 and put on a desk. Pick with
-`--robot so101`.
+Two arms: the [Franka Panda](https://frankarobotics.com) (default - seven
+joints, a workspace thirty times larger) and the
+[SO-101](https://github.com/TheRobotStudio/SO-ARM100) (`--robot so101` - the
+one you can buy for ~£200).
 
 <p align="center">
   <img src="docs/media/teleop_film.gif" width="85%"
@@ -49,18 +53,11 @@ own, in the same research direction as NVIDIA's
 
 ## What it actually does
 
-1. **Tracks your hand** from a single webcam and recovers a metric 3D pose -
-   where the pinch point is, which way the fingers point, how far apart they are.
-2. **Retargets** that onto the arm's five real degrees of freedom, solving
-   inverse kinematics every control step at 30 Hz.
-3. **Records** what you demonstrated as a dataset: camera images, joint
-   positions, and the joint commands you produced.
-4. **Trains** an Action Chunking Transformer on those demonstrations.
-5. **Runs the policy on its own**, on layouts it has never seen, and scores it.
-
-Everything is simulated in MuJoCo and everything runs on a Mac. Nothing is
-bought, and nothing is faked: the scripted expert and the learned policy are
-scored by the same physics that decides whether the cube ended up in the bin.
+1. **Tracks** your hand from one webcam into a metric 3D pose.
+2. **Retargets** it onto the arm's five real degrees of freedom at 30 Hz.
+3. **Records** every demonstration - images, joints, commands, task.
+4. **Trains** an Action Chunking Transformer on them.
+5. **Runs alone** on unseen layouts, scored by the same physics that scored you.
 
 <p align="center">
   <img src="docs/media/policy_demo.gif" width="70%"
@@ -108,9 +105,10 @@ below is reproducible without a camera:
 | | Panda (default) | SO-101 |
 |---|---|---|
 | Scripted expert | **100%** over 80 episodes | **100%** over 80 |
-| Learned policy (ACT) | **100%** - 40/40 unseen layouts | 95% - 19/20 |
+| Learned policy (ACT), single task | **95%** - 38/40 unseen layouts | 95% - 19/20 |
+| Multi-task policy, its bin task | **100%** - 25/25 unseen | - |
 | Training data | 150 scripted episodes | 150 |
-| Training | 12,000 steps, 45 min on an M5 Max | 6,000 steps, 25 min |
+| Training | 12,000 steps, ~45 min on an M-series Mac | 6,000 steps, ~25 min |
 | Grasp accuracy | 6.8 mm mean planar error | 6.1 mm |
 
 Reproduce it with `./scripts/quickstart.sh`. The raw evaluation is in
@@ -149,12 +147,12 @@ with closed-loop replanning when the puck veers), and the policy receives the
 task as a learned embedding. Conditioning is honest one-hot with language
 aliases, not an LLM - the README says exactly what the code does.
 
-**Measured** - one conditioned ACT policy, 14k steps on 480 scripted episodes,
-scored on 25 fresh layouts per task:
+**Measured** - one conditioned ACT policy, 14k steps on 480 scripted episodes:
 
-| bin | push | lift | touch | overall |
-|---|---|---|---|---|
-| **100%** | **80%** | **100%** | **100%** | **95/100** |
+<p align="center">
+  <img src="docs/media/fig_multitask.png" width="82%"
+       alt="Four donut charts: bin 100%, push 80% (was 48% when the target was invisible), lift 100%, touch 100%"/>
+</p>
 
 Push is the honest hard one - contact-rich, long-horizon, and the target is a
 ring on the table rather than a wall-sized bin. Its first score was 48%,
@@ -185,11 +183,10 @@ turn it into geometry:
 .venv/bin/python -m handrobot teleop --stereo-device 1 --baseline 0.12
 ```
 
-Depth becomes ``focal_length x baseline / disparity`` on the wrist landmark;
-bearing still comes from the primary camera, and any frame where the cameras
-disagree falls back to monocular. One pixel of landmark noise at half a metre
-is under a centimetre of depth error at a 12 cm baseline - versus the
-centimetres the size-based estimate wanders.
+Depth becomes ``focal_length x baseline / disparity``; bearing stays with the
+primary camera; disagreement falls back to monocular. One pixel of noise at
+half a metre: under 1 cm of depth error, versus the centimetres a size-based
+estimate wanders.
 
 ## Export to LeRobot
 
@@ -314,16 +311,14 @@ test-suite photograph, driven through the real tracker):
        alt="The teleop cockpit: hand tracking on the left, top and chase views on the right, guidance strip below"/>
 </p>
 
-You need both views: a top view cannot show height and a side view cannot show
-depth, and trying to grasp with only one is what makes this feel impossible.
-A green ring marks where the gripper should go next, and the strip along the
-bottom tells you, in millimetres, exactly how to move your hand to get there.
+<details><summary><b>Why one window, why these views</b> (click)</summary>
 
-It is one window rather than two on purpose. MuJoCo's interactive 3D viewer
-requires the `mjpython` launcher on macOS, and under `mjpython` OpenCV cannot
-open a window at all - so a separate 3D viewer and the camera preview are
-mutually exclusive. `v` swaps the lower panel between the front, hero and wrist
-views.
+A top view cannot show height, a side view cannot show depth; you need both.
+The strip along the bottom tells you, in millimetres, exactly how to move.
+One window because macOS makes MuJoCo's viewer and OpenCV's mutually
+exclusive; `v` cycles the lower panel.
+
+</details>
 
 | Key     | What it does |
 |---------|--------------|
@@ -405,20 +400,10 @@ by the simulator: the cube has to be inside the bin and stay there.
 .venv/bin/python -m handrobot diagnose --checkpoint runs/checkpoints/mine/best.pt
 ```
 
-A success rate tells you a policy is bad, not what is wrong with it. This
-separates the three causes, which need opposite fixes:
-
-- **Grasp misses by more than 8 mm** - the commonest one. The cube is 25 mm
-  wide, so the jaws are closing beside it. Train longer, or record more
-  demonstrations.
-- **The policy ignores its cameras** - it produces the same motion wherever the
-  cube is, having memorised one average trajectory. More training will not help;
-  record with the cube in more varied places.
-- **The arm barely moves** - training diverged. Check the loss in the training
-  log and retrain with a lower learning rate.
-
-For reference, the shipped baseline reports 6.0 mm grasp error, 0.45 rad camera
-sensitivity and 100% over 8 episodes.
+A success rate tells you a policy is bad, not what is wrong with it.
+This separates the three causes - grasp misses (train longer / more demos),
+camera-blind memorisation (more varied layouts, not more steps), and diverged
+training (lower the learning rate) - which need opposite fixes.
 
 ### 6. Build the film
 
@@ -555,7 +540,7 @@ flowchart LR
 .venv/bin/pytest -q
 ```
 
-394 tests. The ones that matter most are the ones that would let a silent
+428 tests. The ones that matter most are the ones that would let a silent
 physical error through:
 
 - `test_reach.py::test_declared_workspace_is_reachable` - fails if the declared
