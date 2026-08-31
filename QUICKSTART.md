@@ -26,7 +26,7 @@ macOS asks for camera permission on first run: System Settings > Privacy & Secur
 ## 3. Drive the robot
 
 ```bash
-make teleop
+make teleop         # or just double-click HandRobot.command in Finder
 ```
 
 | key | action |
