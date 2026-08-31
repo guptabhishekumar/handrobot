@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import math
 
-import numpy as np
 
 from handrobot.config import HandConfig
 from handrobot.hands.types import HandPose

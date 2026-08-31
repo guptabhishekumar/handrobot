@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from handrobot.config import Config, SimConfig, WorkspaceConfig
+from handrobot.config import SimConfig, WorkspaceConfig
 
 
 def test_control_rate_divides_the_physics_timestep_exactly():

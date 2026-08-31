@@ -7,7 +7,6 @@ the dataset writer, the keyboard handling -- is real here. Without this, the two
 commands a user actually types would never have been executed before shipping.
 """
 
-from pathlib import Path
 
 import numpy as np
 import pytest

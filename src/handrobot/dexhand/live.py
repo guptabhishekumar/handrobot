@@ -20,7 +20,6 @@ from handrobot.dexhand.retarget_net import PERSONAL_CHECKPOINT, load_retargeter
 from handrobot.dexhand.synth import landmarks_to_keypoints
 from handrobot.hands.tracker import HandTracker, Webcam
 from handrobot.filters import OneEuroFilter
-from handrobot.hands.geometry import palm_frame
 from handrobot.paths import ASSETS_DIR
 
 MIRROR_XML = ASSETS_DIR / "leap" / "scene_mirror.xml"

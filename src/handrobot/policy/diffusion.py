@@ -23,7 +23,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from handrobot.policy.act import (
-    ACTConfig,
     ResNetBackbone,
     sinusoidal_position_embedding_1d,
     sinusoidal_position_embedding_2d,

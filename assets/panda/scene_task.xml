@@ -56,8 +56,11 @@
          be moved every frame without touching the physics; drawn as a ring so
          it reads as a target rather than as another object to pick up. -->
     <body name="goal_marker" pos="0 0 -1" mocap="true">
-      <geom name="goal_ring" type="cylinder" size="0.045 0.006"
-            rgba="0.30 0.95 0.55 0.30" contype="0" conaffinity="0" group="1"/>
+      <!-- Opaque and wide on purpose: the policy has to SEE this at 128x128.
+           A translucent sliver was invisible to the cameras, and a pushing
+           policy trained against it was pushing blind. -->
+      <geom name="goal_ring" type="cylinder" size="0.052 0.004"
+            rgba="0.10 0.85 0.35 0.95" contype="0" conaffinity="0" group="1"/>
       <geom name="goal_pip" type="cylinder" size="0.013 0.018"
             rgba="0.30 0.95 0.55 0.55" contype="0" conaffinity="0" group="1"/>
     </body>

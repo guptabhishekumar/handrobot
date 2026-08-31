@@ -7,8 +7,9 @@ __pycache__/
 
 # Generated artefacts
 runs/
-assets/reach_table.npz
-assets/gripper_calibration.npz
 assets/models/*.task
-assets/cache/
 .remember/
+# Personal (trained-on-YOUR-hand) checkpoints stay local; the measured
+# tables (reach, gripper) are versioned: they are measurements, not builds.
+assets/cache/*.pt
+.playwright-mcp/

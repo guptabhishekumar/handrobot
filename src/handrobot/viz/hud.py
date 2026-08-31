@@ -326,7 +326,6 @@ def draw_scene_overlays(panel: np.ndarray, env, camera: str,
 def compose(camera: np.ndarray, top: np.ndarray | None, front: np.ndarray | None,
             state: HudState, width: int = 1280, height: int = 720) -> np.ndarray:
     """Assemble the whole interface into one frame."""
-    import cv2
 
     body_height = height - STRIP_HEIGHT
     camera_width = int(width * 0.52)

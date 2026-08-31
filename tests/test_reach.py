@@ -9,7 +9,6 @@ import numpy as np
 import pytest
 
 from handrobot.config import Config, WorkspaceConfig
-from handrobot.geometry import rotation_geodesic
 from handrobot.retarget.reach import (
     REACHABLE_TOLERANCE,
     ReachTable,
@@ -31,7 +30,6 @@ def table():
 
 @pytest.fixture
 def so101_ik():
-    from handrobot.config import Config
     from handrobot.retarget.ik import ArmIK
 
     config = Config(robot=ROBOT)

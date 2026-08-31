@@ -6,7 +6,6 @@ worse than none.
 """
 
 import numpy as np
-import pytest
 import torch
 
 from handrobot.config import Config

@@ -22,7 +22,6 @@ from handrobot.hands.types import (
     INDEX_TIP,
     Landmarks,
     MIDDLE_MCP,
-    PALM_LANDMARKS,
     PINKY_MCP,
     THUMB_TIP,
     WRIST,
@@ -204,7 +203,6 @@ def test_two_hands_choose_the_preferred_one():
     """The operator's other hand rests on the keyboard; following it by accident
     throws the arm across the workspace. The operator's own 'right' arrives
     mirrored, so it carries MediaPipe's 'Left' label."""
-    from handrobot.config import HandConfig
     from handrobot.hands.tracker import HandTracker
 
     tracker = HandTracker.__new__(HandTracker)

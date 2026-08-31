@@ -247,11 +247,39 @@ class PickPlaceEnv:
         self.cube_start_position = self.cube_position.copy()
         if self.task.uses_zone:
             # A zone is sampled the way a bin position is, so it is always
-            # somewhere the arm can reach, and never on top of the puck.
-            for _ in range(50):
-                _, zone, _ = self.sample_layout()
-                if np.linalg.norm(zone[:2] - self.cube_start_position[:2]) > 0.12:
+            # somewhere the arm can reach, and never on top of the puck. It
+            # must also be VISIBLE: a target outside the policy camera's frame
+            # is a task no vision policy can learn, and exactly that happened
+            # -- zones sampled off the right edge of the front camera capped
+            # a pushing policy at 48%.
+            from handrobot.viz.project import project_point
+
+            # Zones get their own region: the puck's spawn band widened across
+            # the table's visible centre, and never the bin's band. Zones drawn
+            # from the bin's distribution -- the first design -- were off the
+            # camera's right edge or inside the bin itself, which capped a
+            # pushing policy at 48%: it could not see what it was aiming for.
+            low = np.array([self.layout.cube_x[0], -0.02])
+            high = np.array([self.layout.cube_x[1], self.layout.cube_y[1]])
+            placed = False
+            for _ in range(200):
+                zone = self.rng.uniform(low, high)
+                zone = np.array([zone[0], zone[1], 0.0])
+                if np.linalg.norm(zone[:2] - self.cube_start_position[:2]) <= 0.13:
+                    continue
+                if np.linalg.norm(zone[:2] - self.bin_position[:2]) <= 0.18:
+                    continue
+                pixel = project_point(
+                    self, "front_cam", np.array([zone[0], zone[1], 0.01]), 128, 128
+                )
+                if pixel is not None and 8 <= pixel[0] <= 120 and 8 <= pixel[1] <= 120:
+                    placed = True
                     break
+            if not placed:
+                raise RuntimeError(
+                    "could not place a pushable, visible zone; check the "
+                    "layout ranges and camera framing"
+                )
             self.zone_position = np.array([zone[0], zone[1], 0.004])
             self.set_goal_marker(self.zone_position)
         else:

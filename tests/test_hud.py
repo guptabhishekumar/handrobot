@@ -10,7 +10,6 @@ import numpy as np
 import pytest
 
 from handrobot.viz.hud import (
-    GAP,
     STRIP_HEIGHT,
     HudState,
     compose,

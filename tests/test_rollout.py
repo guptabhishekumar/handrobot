@@ -1,6 +1,5 @@
 import numpy as np
 
-from handrobot.config import Config
 from handrobot.data.dataset import EpisodeWriter, load_episode
 from handrobot.rollout import ScriptedController, evaluate_controller, run_episode
 from handrobot.scripted import ScriptedExpert

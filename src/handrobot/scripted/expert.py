@@ -184,14 +184,33 @@ class ScriptedExpert:
         )
         start = workspace.clip(env.gripper_pose[0])
         push_seconds = max(1.2, float(np.linalg.norm(through - behind)) / 0.13)
-        return [
-            Waypoint(above_behind, azimuth, closed,
-                     self._travel(start, above_behind), "approach"),
-            Waypoint(behind, azimuth, closed,
-                     self._travel(above_behind, behind), "descend"),
+        plan = []
+        # Replans start with the blade already at table height; hopping up to
+        # hover and back down again just burns clock the episode may not have.
+        # But a low path is only taken when it cannot mow the puck down on the
+        # way to the new starting point.
+        segment = behind[:2] - start[:2]
+        seg_len = float(np.linalg.norm(segment))
+        if seg_len > 1e-9:
+            t_star = float(np.clip(
+                np.dot(cube[:2] - start[:2], segment) / (seg_len ** 2), 0.0, 1.0
+            ))
+            clearance = float(np.linalg.norm(start[:2] + t_star * segment - cube[:2]))
+        else:
+            clearance = float(np.linalg.norm(start[:2] - cube[:2]))
+        if start[2] > push_z + 0.03 or clearance < radius + 0.03:
+            plan.append(Waypoint(above_behind, azimuth, closed,
+                                 self._travel(start, above_behind), "approach"))
+            plan.append(Waypoint(behind, azimuth, closed,
+                                 self._travel(above_behind, behind), "descend"))
+        else:
+            plan.append(Waypoint(behind, azimuth, closed,
+                                 self._travel(start, behind), "approach"))
+        plan += [
             Waypoint(through, azimuth, closed, push_seconds, "push"),
             Waypoint(retreat, azimuth, closed, self._travel(through, retreat), "retreat"),
         ]
+        return plan
 
     def _plan_bin(self, env: PickPlaceEnv) -> list[Waypoint]:
         """The original pick-and-place plan, unchanged."""

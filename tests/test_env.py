@@ -1,8 +1,7 @@
 import numpy as np
 import pytest
 
-from handrobot.config import Config
-from handrobot.sim.env import CUBE_HALF_EXTENT, PickPlaceEnv
+from handrobot.sim.env import PickPlaceEnv
 
 
 def test_reset_is_reproducible_for_a_seed(env):

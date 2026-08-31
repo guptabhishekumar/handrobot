@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 
-from handrobot.config import Config
 from handrobot.rollout import ScriptedController, evaluate_controller, run_episode
 from handrobot.scripted import ScriptedExpert
 

@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 
 from handrobot.dexhand.fk import KEYPOINT_NAMES, LeapFK
-from handrobot.dexhand.synth import HUMAN_KEYPOINTS, sample_hands
+from handrobot.dexhand.synth import sample_hands
 from handrobot.paths import ASSETS_DIR
 
 CHECKPOINT = ASSETS_DIR / "cache" / "leap_retargeter.pt"
