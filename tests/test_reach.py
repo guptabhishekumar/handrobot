@@ -141,3 +141,26 @@ def test_grasp_height_supports_a_true_top_down_approach(table, so101_ik):
                 f"gripper is {np.degrees(angle_from_vertical):.1f} deg off vertical "
                 f"at radius {radius:.2f}, azimuth {azimuth:.2f}"
             )
+
+
+def test_the_table_builds_against_the_so101_no_matter_the_default(monkeypatch):
+    """Regression for a cache-masked bug: ReachTable.build used the default
+    arm's IK, which silently became the Panda when the default changed. Only
+    machines without the cached table (CI, fresh clones) ever executed the
+    build, so every local run hid it."""
+    from handrobot.retarget import reach as reach_module
+
+    captured = {}
+
+    class SpyIK:
+        def __init__(self, config=None, spec=None, **kw):
+            captured["spec"] = spec
+
+        def solve(self, *a, **kw):
+            class R:
+                position_error = 0.0
+            return R()
+
+    monkeypatch.setattr("handrobot.retarget.ik.ArmIK", SpyIK)
+    reach_module.ReachTable.build()
+    assert captured["spec"] is not None and captured["spec"].name == "so101"

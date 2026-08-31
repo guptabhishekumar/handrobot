@@ -126,6 +126,72 @@ moment the success rate went from 0% to 90%.
 pipeline is known-good before you record anything, and so your own
 hand-trained policy has something to be compared against on identical layouts.
 
+## Four tasks, one policy, plain-language selection
+
+The same scene serves four objectives - and a single conditioned ACT policy
+learns all of them, selected by name or by any natural phrasing:
+
+```bash
+.venv/bin/python -m handrobot eval  --task "push it to the ring"
+.venv/bin/python -m handrobot demo  --task lift
+.venv/bin/python -m handrobot collect-scripted --task touch
+```
+
+| task | objective | judged by the physics as |
+|---|---|---|
+| `bin` | put the puck in the bin | puck inside the bin, resting |
+| `push` | push the puck to the green ring | puck within 5 cm of the ring, on the table |
+| `lift` | lift the puck up high | puck held above 15 cm |
+| `touch` | touch the puck without moving it | gripper on the puck, puck undisplaced |
+
+The scripted expert plans each one differently (pushing is a closed-jaw blade
+with closed-loop replanning when the puck veers), and the policy receives the
+task as a learned embedding. Conditioning is honest one-hot with language
+aliases, not an LLM - the README says exactly what the code does.
+
+## Diffusion policy, for the ablation
+
+The second policy class, sharing ACT's observation encoder token for token, so
+the comparison isolates exactly one variable - how the action chunk is
+generated (CVAE decode vs. iterative denoising):
+
+```bash
+.venv/bin/python -m handrobot train --data runs/demos/panda_scripted --model diffusion
+```
+
+DDPM training with a cosine schedule, DDIM sampling, x0 clamping; both models
+are scored by the same simulator on the same seeds.
+
+## Stereo depth, if you have a second webcam
+
+Monocular depth is the pipeline's one weak signal. A second webcam and a ruler
+turn it into geometry:
+
+```bash
+.venv/bin/python -m handrobot teleop --stereo-device 1 --baseline 0.12
+```
+
+Depth becomes ``focal_length x baseline / disparity`` on the wrist landmark;
+bearing still comes from the primary camera, and any frame where the cameras
+disagree falls back to monocular. One pixel of landmark noise at half a metre
+is under a centimetre of depth error at a 12 cm baseline - versus the
+centimetres the size-based estimate wanders.
+
+## Export to LeRobot
+
+Datasets convert to the Hugging Face LeRobot format through LeRobot's own
+writer (valid by construction), ready for `push_to_hub()`:
+
+```bash
+uv pip install 'lerobot[dataset]'
+.venv/bin/python -m handrobot export-lerobot \
+    --data runs/demos/panda_multitask --out runs/lerobot \
+    --repo-id yourname/handrobot-panda
+```
+
+Task instructions travel with every frame, so language-conditioned trainers
+see them.
+
 ## The dexterous hand: neural retargeting
 
 A second, self-contained showpiece: a 16-joint [LEAP

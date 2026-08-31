@@ -63,6 +63,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="camera horizontal field of view in degrees; only the "
                         "forward/back axis depends on it, so raise it if that "
                         "axis feels too sensitive and lower it if too sluggish")
+    p.add_argument("--stereo-device", type=int, default=None,
+                   help="second camera index; turns hand depth from a size "
+                        "guess into stereo triangulation")
+    p.add_argument("--baseline", type=float, default=0.12,
+                   help="distance between the two cameras in metres "
+                        "(measure it with a ruler)")
     _add_robot(p)
     _add_common(p)
 
@@ -73,6 +79,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="default: runs/demos/<robot>_scripted")
     p.add_argument("--keep-failures", action="store_true",
                    help="also store episodes that did not succeed")
+    p.add_argument("--task", type=str, default="bin",
+                   help="objective: a task name (bin, push, lift, touch) or any "
+                        "of its natural phrasings, e.g. 'push it to the ring'")
     _add_robot(p)
     _add_common(p)
 
@@ -86,6 +95,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--device", type=str, default=None, help="mps, cuda or cpu")
     p.add_argument("--resume", type=Path, default=None)
     p.add_argument("--no-augment", action="store_true")
+    p.add_argument("--model", type=str, default="act", choices=["act", "diffusion"],
+                   help="policy class: ACT (default) or a diffusion policy, "
+                        "for the ablation")
     _add_common(p)
 
     p = sub.add_parser("eval", help="measure a controller's success rate")
@@ -96,6 +108,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--open-loop", action="store_true",
                    help="replay whole chunks instead of temporal ensembling")
     p.add_argument("--out", type=Path, default=None, help="write results as JSON")
+    p.add_argument("--task", type=str, default="bin",
+                   help="objective: a task name (bin, push, lift, touch) or any "
+                        "of its natural phrasings, e.g. 'push it to the ring'")
     _add_robot(p)
     _add_common(p)
 
@@ -114,6 +129,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", type=Path, default=OUTPUT_DIR / "demo.mp4")
     p.add_argument("--camera", type=str, default="hero_cam")
     p.add_argument("--device", type=str, default=None)
+    p.add_argument("--task", type=str, default="bin",
+                   help="objective: a task name (bin, push, lift, touch) or any "
+                        "of its natural phrasings, e.g. 'push it to the ring'")
     _add_robot(p)
     _add_common(p)
 
@@ -148,6 +166,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("dataset", help="summarise a dataset")
     p.add_argument("--data", type=Path, required=True)
+
+    p = sub.add_parser(
+        "export-lerobot",
+        help="convert a dataset to the Hugging Face LeRobot format",
+    )
+    p.add_argument("--data", type=Path, required=True)
+    p.add_argument("--out", type=Path, required=True,
+                   help="directory for the LeRobot dataset")
+    p.add_argument("--repo-id", type=str, required=True,
+                   help="Hub-style id, e.g. yourname/handrobot-panda")
+    p.add_argument("--keep-failures", action="store_true")
+    _add_robot(p)
 
     return parser
 
@@ -225,6 +255,8 @@ def command_teleop(args: argparse.Namespace) -> int:
         world_z_sign=-1.0 if args.flip_z else 1.0,
         config=config,
         sim_view=args.view,
+        stereo_device=args.stereo_device,
+        stereo_baseline=args.baseline,
     )
     print(
         f"\nsaved {stats.episodes_saved} episodes "
@@ -256,7 +288,7 @@ def command_collect_scripted(args: argparse.Namespace) -> int:
     config = Config(robot=args.robot)
     cameras = [c.name for c in config.sim.policy_cameras]
     out = args.out if args.out is not None else DATA_DIR / f"{args.robot}_scripted"
-    env = PickPlaceEnv(config=config, seed=args.seed)
+    env = PickPlaceEnv(config=config, seed=args.seed, task=args.task)
     controller = ScriptedController(ScriptedExpert(config))
     writer = EpisodeWriter(out, cameras, source="scripted")
 
@@ -265,7 +297,11 @@ def command_collect_scripted(args: argparse.Namespace) -> int:
         result = run_episode(env, controller, writer=writer, seed=args.seed + i)
         successes += int(result.success)
         if result.success or args.keep_failures:
-            writer.finish(success=result.success, metadata={"seed": args.seed + i})
+            writer.finish(success=result.success, metadata={
+                "seed": args.seed + i,
+                "task": env.task.name,
+                "instruction": env.task.instruction,
+            })
             kept += 1
         else:
             writer.discard()
@@ -292,7 +328,7 @@ def command_train(args: argparse.Namespace) -> int:
     config.seed = args.seed
     config.augment = not args.no_augment
 
-    summary = train(args.data, args.out, config, device_name=args.device, resume=args.resume)
+    summary = train(args.data, args.out, config, device_name=args.device, resume=args.resume, model=args.model)
     print(f"\ntrained {summary['steps']} steps on {summary['episodes']} episodes "
           f"in {summary['wall_seconds'] / 60:.1f} min")
     print(f"best validation L1: {summary['best_val_l1']}")
@@ -335,7 +371,7 @@ def command_eval(args: argparse.Namespace) -> int:
     controller, label = _build_controller(args, config)
     print(f"evaluating {label} on the {config.spec.name} over {args.episodes} episodes\n")
 
-    env = PickPlaceEnv(config=config, seed=args.seed)
+    env = PickPlaceEnv(config=config, seed=args.seed, task=args.task)
     results = evaluate_controller(env, controller, args.episodes, seed=args.seed)
     env.close()
 
@@ -386,7 +422,7 @@ def command_demo(args: argparse.Namespace) -> int:
 
     config = Config(robot=args.robot)
     controller, label = _build_controller(args, config)
-    env = PickPlaceEnv(config=config, seed=args.seed)
+    env = PickPlaceEnv(config=config, seed=args.seed, task=args.task)
 
     frames: list[np.ndarray] = []
     successes = 0
@@ -491,6 +527,19 @@ def command_dexhand(args: argparse.Namespace) -> int:
     return run_dexhand(device=args.device, hand=args.hand)
 
 
+def command_export_lerobot(args: argparse.Namespace) -> int:
+    from handrobot.data.lerobot_export import export_lerobot
+
+    try:
+        export_lerobot(args.data, args.out, args.repo_id,
+                       robot_type=args.robot,
+                       successful_only=not args.keep_failures)
+    except ImportError as error:
+        print(error)
+        return 1
+    return 0
+
+
 def command_dataset(args: argparse.Namespace) -> int:
     from handrobot.data.dataset import read_meta
 
@@ -526,6 +575,7 @@ COMMANDS = {
     "replay": command_replay,
     "dexhand": command_dexhand,
     "dataset": command_dataset,
+    "export-lerobot": command_export_lerobot,
 }
 
 

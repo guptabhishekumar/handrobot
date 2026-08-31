@@ -19,6 +19,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3", "pytest-cov>=5.0"]
+# For `handrobot export-lerobot` only; heavy dependency tree of its own.
+lerobot = ["lerobot[dataset]>=0.6"]
 
 [build-system]
 requires = ["hatchling"]

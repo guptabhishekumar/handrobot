@@ -59,8 +59,16 @@ class PickPlaceEnv:
         config: Config | None = None,
         render_cameras: tuple[str, ...] | None = None,
         seed: int | None = None,
+        task: str = "bin",
     ) -> None:
+        from handrobot.tasks import get_task
+
         self.config = config or Config()
+        self.task = get_task(task)
+        #: The pushed-to zone for tasks that use one; sampled at reset.
+        self.zone_position: np.ndarray | None = None
+        #: Where the puck settled at reset, for tasks judged against it.
+        self.cube_start_position: np.ndarray | None = None
         self.spec: RobotSpec = self.config.spec
         self.sim: SimConfig = self.config.sim
         self.layout = self.spec.layout
@@ -236,6 +244,18 @@ class PickPlaceEnv:
         for _ in range(int(0.2 / self.sim.physics_timestep)):
             mujoco.mj_step(self.model, self.data)
 
+        self.cube_start_position = self.cube_position.copy()
+        if self.task.uses_zone:
+            # A zone is sampled the way a bin position is, so it is always
+            # somewhere the arm can reach, and never on top of the puck.
+            for _ in range(50):
+                _, zone, _ = self.sample_layout()
+                if np.linalg.norm(zone[:2] - self.cube_start_position[:2]) > 0.12:
+                    break
+            self.zone_position = np.array([zone[0], zone[1], 0.004])
+            self.set_goal_marker(self.zone_position)
+        else:
+            self.zone_position = None
         self._step_count = 0
         self._success_streak = 0
         return self.observe()
@@ -288,10 +308,16 @@ class PickPlaceEnv:
             mujoco.mj_step(self.model, self.data)
         self._step_count += 1
 
-        success_now = self.cube_in_bin()
+        success_now = self.task.success(self)
         self._success_streak = self._success_streak + 1 if success_now else 0
-        success = self._success_streak >= self.sim.success_hold_steps
-        done = success or self._step_count >= self.sim.max_episode_steps
+        hold = (self.task.hold_steps
+                if self.task.hold_steps is not None
+                else self.sim.success_hold_steps)
+        success = self._success_streak >= hold
+        budget = (self.task.max_steps
+                  if self.task.max_steps is not None
+                  else self.sim.max_episode_steps)
+        done = success or self._step_count >= budget
 
         return StepResult(
             observation=self.observe() if observe else self.observe_state(),

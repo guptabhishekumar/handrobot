@@ -67,7 +67,7 @@ def test_replay_renders_one_frame_per_step(recorded):
 
 
 def test_replay_refuses_an_episode_with_no_seed(tmp_path):
-    from tests.test_dataset import write_dataset
+    from test_dataset import write_dataset
 
     write_dataset(tmp_path, episodes=1, length=3)
     episode = load_episode(list_episodes(tmp_path)[0])

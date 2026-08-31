@@ -35,10 +35,15 @@ train:               ## train ACT on your recorded demonstrations
 eval:                ## score a policy on 50 unseen layouts
 	$(PY) -m handrobot eval --checkpoint runs/checkpoints/mine/best.pt --episodes 50
 
+multitask:           ## collect all 4 tasks and train one conditioned policy
+	for T in bin push lift touch; do \
+	  $(PY) -m handrobot collect-scripted --task $$T --episodes 120 --out runs/demos/panda_multitask; done
+	$(PY) -m handrobot train --data runs/demos/panda_multitask --out runs/checkpoints/multitask --steps 16000
+
 baseline:            ## full reproducible pipeline without a camera (~60 min)
 	./scripts/quickstart.sh
 
 test:                ## run the full suite (~2 min, headless)
 	$(PY) -m pytest -q
 
-.PHONY: help setup check teleop demo film dexhand dexhand-record train eval baseline test
+.PHONY: help setup check teleop demo film dexhand dexhand-record train eval multitask baseline test

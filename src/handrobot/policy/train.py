@@ -94,6 +94,9 @@ class BatchSampler:
             "state": (state - self.state_mean) / self.state_std,
             "action": (action - self.action_mean) / self.action_std,
             "is_pad": is_pad,
+            "task": torch.from_numpy(
+                np.array([s["task"] for s in samples], dtype=np.int64)
+            ).to(self.device),
         }
 
     def epochs(self) -> Iterator[dict]:
@@ -180,6 +183,7 @@ def train(
     cameras: tuple[str, ...] | None = None,
     resume: Path | str | None = None,
     log: bool = True,
+    model: str = "act",
 ) -> dict:
     """Train ACT on a demonstration dataset and return the training summary."""
     config = config or TrainConfig()
@@ -199,20 +203,29 @@ def train(
         )
         print(f"device: {device}")
 
-    policy_config = ACTConfig(
+    shared = dict(
         state_dim=dataset.episodes[0].states.shape[1],
         action_dim=dataset.episodes[0].actions.shape[1],
         chunk_size=config.chunk_size,
         cameras=tuple(dataset.cameras),
+        n_tasks=dataset.n_tasks,
         hidden_dim=config.hidden_dim,
         dim_feedforward=config.dim_feedforward,
         n_heads=config.n_heads,
         n_encoder_layers=config.n_encoder_layers,
-        n_decoder_layers=config.n_decoder_layers,
-        latent_dim=config.latent_dim,
         dropout=config.dropout,
     )
-    policy = ACTPolicy(policy_config).to(device)
+    if model == "diffusion":
+        from handrobot.policy.diffusion import DiffusionChunkPolicy, DiffusionConfig
+
+        policy = DiffusionChunkPolicy(DiffusionConfig(**shared)).to(device)
+    else:
+        policy_config = ACTConfig(
+            **shared,
+            n_decoder_layers=config.n_decoder_layers,
+            latent_dim=config.latent_dim,
+        )
+        policy = ACTPolicy(policy_config).to(device)
     if resume is not None:
         # Weights only. The optimiser state is not carried over, so a resumed run
         # restarts the schedule; that is fine for fine-tuning and wrong for
@@ -253,7 +266,8 @@ def train(
         images = augment(batch["images"]) if config.augment else batch["images"]
         ordered = [images[c] for c in dataset.cameras]
         losses = policy.compute_loss(
-            ordered, batch["state"], batch["action"], batch["is_pad"], config.kl_weight
+            ordered, batch["state"], batch["action"], batch["is_pad"], config.kl_weight,
+            task=batch["task"] if policy.config.n_tasks > 1 else None,
         )
         optimizer.zero_grad(set_to_none=True)
         losses["loss"].backward()
@@ -326,7 +340,8 @@ def evaluate(
     for batch in sampler.all_batches():
         ordered = [batch["images"][c] for c in cameras]
         losses = policy.compute_loss(
-            ordered, batch["state"], batch["action"], batch["is_pad"], kl_weight
+            ordered, batch["state"], batch["action"], batch["is_pad"], kl_weight,
+            task=batch["task"] if policy.config.n_tasks > 1 else None,
         )
         total += float(losses["l1"]) * batch["state"].shape[0]
         count += batch["state"].shape[0]

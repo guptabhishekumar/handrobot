@@ -58,6 +58,8 @@ class ChunkedActor:
 
         self._pending: list[tuple[int, np.ndarray]] = []
         self._step = 0
+        #: Task id fed to a multi-task policy; single-task policies ignore it.
+        self.task_id: int = 0
 
     def reset(self) -> None:
         """Clear the ensembling buffer between episodes."""
@@ -72,7 +74,12 @@ class ChunkedActor:
         ]
         state_tensor = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
         normalized = (state_tensor - self._state_mean) / self._state_std
-        predicted = self.policy(tensors, normalized)["actions"][0].float().cpu().numpy()
+        task = (
+            torch.tensor([self.task_id], device=self.device)
+            if self.config.n_tasks > 1
+            else None
+        )
+        predicted = self.policy(tensors, normalized, task=task)["actions"][0].float().cpu().numpy()
         return predicted.astype(np.float64) * self._action_std + self._action_mean
 
     def act(self, images: dict[str, np.ndarray], state: np.ndarray) -> np.ndarray:
@@ -123,10 +130,15 @@ def save_checkpoint(
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    from handrobot.policy.diffusion import DiffusionChunkPolicy
+
     torch.save(
         {
             "state_dict": policy.state_dict(),
             "config": policy.config.to_dict(),
+            "model_type": (
+                "diffusion" if isinstance(policy, DiffusionChunkPolicy) else "act"
+            ),
             "stats": stats.to_dict(),
             "extra": extra or {},
         },
@@ -140,10 +152,17 @@ def load_checkpoint(
 ) -> tuple[ACTPolicy, NormalizationStats, dict]:
     """Rebuild a policy from a checkpoint written by :func:`save_checkpoint`."""
     payload = torch.load(Path(path), map_location=device, weights_only=False)
-    config = ACTConfig.from_dict(payload["config"])
-    # The backbone weights come from the checkpoint, so skip the download.
-    config.pretrained_backbone = False
-    policy = ACTPolicy(config)
+    if payload.get("model_type", "act") == "diffusion":
+        from handrobot.policy.diffusion import DiffusionChunkPolicy, DiffusionConfig
+
+        config = DiffusionConfig.from_dict(payload["config"])
+        config.pretrained_backbone = False
+        policy = DiffusionChunkPolicy(config)
+    else:
+        config = ACTConfig.from_dict(payload["config"])
+        # The backbone weights come from the checkpoint, so skip the download.
+        config.pretrained_backbone = False
+        policy = ACTPolicy(config)
     policy.load_state_dict(payload["state_dict"])
     policy.to(device)
     stats = NormalizationStats.from_dict(payload["stats"])

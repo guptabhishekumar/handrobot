@@ -391,6 +391,8 @@ def run_teleop(
     world_z_sign: float = 1.0,
     config: Config | None = None,
     sim_view: str = "front_cam",
+    stereo_device: int | None = None,
+    stereo_baseline: float = 0.12,
 ) -> TeleopStats:
     """Open the camera, open the simulator, and loop until the operator quits."""
     import cv2
@@ -430,6 +432,13 @@ def run_teleop(
     episode_seed = seed
     last_time = time.perf_counter()
 
+    stereo = None
+    if stereo_device is not None:
+        from handrobot.hands.stereo import StereoRig
+
+        stereo = StereoRig(stereo_device, stereo_baseline, config.hand)
+        print(f"stereo depth on: second camera {stereo_device}, "
+              f"baseline {stereo_baseline * 1000:.0f} mm")
     try:
         with Webcam(device) as camera, HandTracker(
             camera.width, camera.height, config.hand, world_z_sign
@@ -445,6 +454,8 @@ def run_teleop(
                 session.stats.frames_seen += 1
 
                 pose, landmarks = tracker.detect(frame)
+                if stereo is not None:
+                    pose = stereo.refine(pose, camera.width)
                 if pose is not None:
                     session.stats.frames_tracked += 1
                 else:
@@ -546,6 +557,8 @@ def run_teleop(
                 elif key == ord("h"):
                     session.go_home()
     finally:
+        if stereo is not None:
+            stereo.close()
         try:
             import cv2 as _cv2
 

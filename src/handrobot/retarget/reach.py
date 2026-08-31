@@ -100,8 +100,14 @@ class ReachTable:
     def build(cls, ik=None, progress: bool = False) -> "ReachTable":
         """Sweep the grid, solving IK at every candidate pitch. Takes a few seconds."""
         from handrobot.retarget.ik import ArmIK
+        from handrobot.robots import get_robot
 
-        ik = ik or ArmIK()
+        # This table describes the SO-101 and nothing else: its grid, warm
+        # starts and pitch coupling are that arm's geometry. Building it with
+        # the *default* arm broke the day the default became the Panda -- and
+        # only on machines without the cached file, which is why CI caught it
+        # and no local run ever did.
+        ik = ik or ArmIK(spec=get_robot("so101"))
         pitch = np.zeros((len(RADII), len(HEIGHTS)))
         error = np.full((len(RADII), len(HEIGHTS)), np.inf)
 

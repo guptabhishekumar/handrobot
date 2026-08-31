@@ -50,6 +50,9 @@ class ACTConfig:
     latent_dim: int = 32
     dropout: float = 0.1
     pretrained_backbone: bool = True
+    #: 1 means unconditioned (and keeps old checkpoints loading unchanged);
+    #: more than 1 adds a learned task embedding to the conditioning.
+    n_tasks: int = 1
 
     def to_dict(self) -> dict:
         payload = dict(self.__dict__)
@@ -60,6 +63,7 @@ class ACTConfig:
     def from_dict(cls, payload: dict) -> "ACTConfig":
         payload = dict(payload)
         payload["cameras"] = tuple(payload["cameras"])
+        payload.setdefault("n_tasks", 1)
         return cls(**payload)
 
 
@@ -136,6 +140,14 @@ class ACTPolicy(nn.Module):
 
         self.state_proj = nn.Linear(config.state_dim, hidden)
         self.latent_proj = nn.Linear(config.latent_dim, hidden)
+        # Task conditioning, only materialised for multi-task training so that
+        # every existing single-task checkpoint still loads bit-for-bit. The
+        # embedding is added to the state token on both the observation and the
+        # CVAE side: one vector that tells the whole network which objective
+        # this trajectory serves.
+        self.task_embed = (
+            nn.Embedding(config.n_tasks, hidden) if config.n_tasks > 1 else None
+        )
         # One learned embedding per non-image token, so the transformer can tell
         # the latent token from the proprioception token.
         self.extra_token_embed = nn.Parameter(torch.zeros(2, hidden))
@@ -190,15 +202,27 @@ class ACTPolicy(nn.Module):
             self._image_pos_cache[key] = cached
         return cached
 
+    def _task_vector(self, task: torch.Tensor | None, batch: int, device) -> torch.Tensor | None:
+        if self.task_embed is None:
+            return None
+        if task is None:
+            raise ValueError("this policy is multi-task; a task id is required")
+        return self.task_embed(task.to(device))
+
     def encode_latent(
-        self, state: torch.Tensor, actions: torch.Tensor, is_pad: torch.Tensor
+        self, state: torch.Tensor, actions: torch.Tensor, is_pad: torch.Tensor,
+        task: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Posterior over the style latent, given the demonstrated action chunk."""
         batch = state.shape[0]
+        state_token = self.vae_state_proj(state)
+        conditioning = self._task_vector(task, batch, state.device)
+        if conditioning is not None:
+            state_token = state_token + conditioning
         tokens = torch.cat(
             [
                 self.vae_cls.expand(batch, -1, -1),
-                self.vae_state_proj(state).unsqueeze(1),
+                state_token.unsqueeze(1),
                 self.vae_action_proj(actions),
             ],
             dim=1,
@@ -213,15 +237,20 @@ class ACTPolicy(nn.Module):
         return mu, logvar.clamp(-8.0, 8.0)
 
     def encode_observation(
-        self, images: Sequence[torch.Tensor], state: torch.Tensor, latent: torch.Tensor
+        self, images: Sequence[torch.Tensor], state: torch.Tensor, latent: torch.Tensor,
+        task: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Build the transformer memory from cameras, proprioception and the latent."""
         if len(images) != len(self.config.cameras):
             raise ValueError(f"expected {len(self.config.cameras)} camera tensors, got {len(images)}")
 
+        state_token = self.state_proj(state)
+        conditioning = self._task_vector(task, state.shape[0], state.device)
+        if conditioning is not None:
+            state_token = state_token + conditioning
         tokens = [
             (self.latent_proj(latent) + self.extra_token_embed[0]).unsqueeze(1),
-            (self.state_proj(state) + self.extra_token_embed[1]).unsqueeze(1),
+            (state_token + self.extra_token_embed[1]).unsqueeze(1),
         ]
         for backbone, image in zip(self.backbones, images):
             features = self.image_proj(backbone(image))
@@ -244,6 +273,7 @@ class ACTPolicy(nn.Module):
         state: torch.Tensor,
         actions: torch.Tensor | None = None,
         is_pad: torch.Tensor | None = None,
+        task: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Predict an action chunk.
 
@@ -254,13 +284,13 @@ class ACTPolicy(nn.Module):
         if actions is not None:
             if is_pad is None:
                 is_pad = torch.zeros(actions.shape[:2], dtype=torch.bool, device=actions.device)
-            mu, logvar = self.encode_latent(state, actions, is_pad)
+            mu, logvar = self.encode_latent(state, actions, is_pad, task)
             latent = mu + torch.randn_like(mu) * torch.exp(0.5 * logvar)
         else:
             mu = logvar = None
             latent = torch.zeros(state.shape[0], self.config.latent_dim, device=state.device)
 
-        memory = self.encode_observation(images, state, latent)
+        memory = self.encode_observation(images, state, latent, task)
         predicted = self.decode_actions(memory)
         return {"actions": predicted, "mu": mu, "logvar": logvar}
 
@@ -271,9 +301,10 @@ class ACTPolicy(nn.Module):
         actions: torch.Tensor,
         is_pad: torch.Tensor,
         kl_weight: float,
+        task: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """L1 action loss over unpadded steps, plus the KL regulariser."""
-        output = self.forward(images, state, actions, is_pad)
+        output = self.forward(images, state, actions, is_pad, task)
         valid = (~is_pad).unsqueeze(-1).float()
         l1 = (F.l1_loss(output["actions"], actions, reduction="none") * valid).sum() / valid.sum().clamp(min=1.0)
         mu, logvar = output["mu"], output["logvar"]

@@ -89,7 +89,112 @@ class ScriptedExpert:
         )
 
     def plan(self, env: PickPlaceEnv) -> list[Waypoint]:
-        """Build the waypoint list for the current object layout."""
+        """Build the waypoint list for the current layout and the env's task."""
+        task = getattr(env, "task", None)
+        name = task.name if task is not None else "bin"
+        if name == "push":
+            return self._plan_push(env)
+        if name == "lift":
+            return self._plan_lift(env)
+        if name == "touch":
+            return self._plan_touch(env)
+        return self._plan_bin(env)
+
+    def _travel(self, a: np.ndarray, b: np.ndarray) -> float:
+        """Seconds to move between two points at the arm's travel speed."""
+        distance = float(np.linalg.norm(np.asarray(b) - np.asarray(a)))
+        return max(self.spec.min_segment, distance / self.spec.travel_speed)
+
+    def _grasp_segments(self, env: PickPlaceEnv) -> tuple[list[Waypoint], float, float, np.ndarray]:
+        """Approach, descend and close on the puck: the shared opening moves."""
+        workspace = self.config.workspace
+        cube = env.cube_position.copy()
+        grasp_azimuth = self.grasp_azimuth(_cube_yaw(env), cube)
+        width = 2 * self.spec.cube_half_extent
+        open_gap = min(self.calibration.gap_max * 0.94, width + 0.030)
+        grip_gap = max(self.calibration.gap_min, width - 0.008)
+        at_cube = workspace.clip(np.array([cube[0], cube[1], self.grasp_height]))
+        above_cube = workspace.clip(np.array([cube[0], cube[1], self.hover_height]))
+        start = workspace.clip(env.gripper_pose[0])
+        segments = [
+            Waypoint(above_cube, grasp_azimuth, open_gap,
+                     self._travel(start, above_cube), "approach"),
+            Waypoint(at_cube, grasp_azimuth, open_gap,
+                     self._travel(above_cube, at_cube), "descend"),
+            Waypoint(at_cube, grasp_azimuth, grip_gap, self.spec.close_duration, "close"),
+        ]
+        return segments, grasp_azimuth, grip_gap, above_cube
+
+    def _plan_lift(self, env: PickPlaceEnv) -> list[Waypoint]:
+        """Grasp, raise well clear of the table, and hold."""
+        workspace = self.config.workspace
+        cube = env.cube_position.copy()
+        segments, azimuth, grip_gap, _ = self._grasp_segments(env)
+        high = workspace.clip(np.array([cube[0], cube[1], max(self.hover_height, 0.20)]))
+        segments += [
+            Waypoint(high, azimuth, grip_gap,
+                     self._travel(segments[-1].position, high), "lift"),
+            Waypoint(high, azimuth, grip_gap, 1.0, "hold"),
+        ]
+        return segments
+
+    def _plan_touch(self, env: PickPlaceEnv) -> list[Waypoint]:
+        """Rest the closed jaw against the top of the puck, gently."""
+        workspace = self.config.workspace
+        cube = env.cube_position.copy()
+        azimuth = self.grasp_azimuth(_cube_yaw(env), cube)
+        closed = self.calibration.gap_min
+        above = workspace.clip(np.array([cube[0], cube[1], self.hover_height]))
+        # The tool centre point sits between the fingertips, so parking it just
+        # above the puck's top face rests the closed tips on the puck.
+        contact_z = cube[2] + self.spec.cube_half_extent + 0.012
+        at_top = workspace.clip(np.array([cube[0], cube[1], contact_z]))
+        start = workspace.clip(env.gripper_pose[0])
+        return [
+            Waypoint(above, azimuth, closed, self._travel(start, above), "approach"),
+            Waypoint(at_top, azimuth, closed,
+                     2.0 * self._travel(above, at_top), "descend"),
+            Waypoint(at_top, azimuth, closed, 1.0, "hold"),
+        ]
+
+    def _plan_push(self, env: PickPlaceEnv) -> list[Waypoint]:
+        """Slide the puck into the ring with closed jaws, like a blade."""
+        workspace = self.config.workspace
+        cube = env.cube_position.copy()
+        zone = env.zone_position.copy()
+        direction = zone[:2] - cube[:2]
+        direction = direction / max(float(np.linalg.norm(direction)), 1e-9)
+        # Jaws across the direction of travel: the flat of the closed gripper
+        # meets the puck instead of the puck slipping between the fingers.
+        azimuth = wrap_to_pi(float(np.arctan2(direction[1], direction[0])) + np.pi / 2)
+        azimuth = self._nearest_equivalent(azimuth, float(np.arctan2(cube[1], cube[0])) + np.pi / 2)
+        closed = self.calibration.gap_min
+        radius = self.spec.cube_half_extent
+
+        push_z = self.grasp_height
+        behind = np.array([*(cube[:2] - direction * (radius + 0.045)), push_z])
+        # Stop with the blade just past where the puck's centre must end up.
+        through = np.array([*(zone[:2] - direction * (radius + 0.006)), push_z])
+        behind = workspace.clip(behind)
+        through = workspace.clip(through)
+        above_behind = workspace.clip(np.array([behind[0], behind[1], self.hover_height]))
+        retreat = workspace.clip(
+            np.array([through[0] - direction[0] * 0.06,
+                      through[1] - direction[1] * 0.06, self.hover_height])
+        )
+        start = workspace.clip(env.gripper_pose[0])
+        push_seconds = max(1.2, float(np.linalg.norm(through - behind)) / 0.13)
+        return [
+            Waypoint(above_behind, azimuth, closed,
+                     self._travel(start, above_behind), "approach"),
+            Waypoint(behind, azimuth, closed,
+                     self._travel(above_behind, behind), "descend"),
+            Waypoint(through, azimuth, closed, push_seconds, "push"),
+            Waypoint(retreat, azimuth, closed, self._travel(through, retreat), "retreat"),
+        ]
+
+    def _plan_bin(self, env: PickPlaceEnv) -> list[Waypoint]:
+        """The original pick-and-place plan, unchanged."""
         workspace = self.config.workspace
         cube = env.cube_position.copy()
         bin_pos = env.bin_position.copy()

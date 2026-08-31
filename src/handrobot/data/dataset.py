@@ -296,6 +296,15 @@ class DemoDataset:
         self._index: list[tuple[int, int]] = [
             (e, t) for e, episode in enumerate(self.episodes) for t in range(len(episode))
         ]
+        # Task conditioning. Episodes recorded before tasks existed carry no
+        # task metadata and default to the first task; a dataset is multi-task
+        # only if any episode says so explicitly.
+        from handrobot.tasks import TASK_NAMES, task_id
+
+        self.episode_tasks = [
+            task_id(e.metadata.get("task", TASK_NAMES[0])) for e in self.episodes
+        ]
+        self.n_tasks = len(TASK_NAMES) if len(set(self.episode_tasks)) > 1 else 1
         self.stats = self.compute_stats()
 
     def __len__(self) -> int:
@@ -337,6 +346,7 @@ class DemoDataset:
             "state": episode.states[t],
             "action": chunk.astype(np.float32),
             "is_pad": is_pad,
+            "task": np.int64(self.episode_tasks[episode_index]),
         }
         for camera in self.cameras:
             sample[f"image.{camera}"] = episode.images[camera][t]

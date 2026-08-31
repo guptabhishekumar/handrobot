@@ -46,6 +46,12 @@ class ScriptedController:
         self.expert.reset(env)
 
     def act(self, env: PickPlaceEnv, observation: Observation) -> np.ndarray:
+        # Closed-loop replanning: when the plan has run out and the episode has
+        # not ended, the objective was not met -- the puck slipped, veered, or
+        # was missed. Replan from wherever things actually are and try again,
+        # exactly as an operator would.
+        if self.expert.finished:
+            self.expert.reset(env)
         return self.expert.act(env)
 
 
@@ -57,6 +63,11 @@ class PolicyController:
 
     def reset(self, env: PickPlaceEnv) -> None:
         self.actor.reset()
+        task = getattr(env, "task", None)
+        if task is not None and hasattr(self.actor, "task_id"):
+            from handrobot.tasks import task_id
+
+            self.actor.task_id = task_id(task.name)
 
     def act(self, env: PickPlaceEnv, observation: Observation) -> np.ndarray:
         return self.actor.act(observation.images, observation.joint_positions)
@@ -95,7 +106,10 @@ def run_episode(
     observation = env.reset(seed=seed)
     controller.reset(env)
 
-    limit = max_steps if max_steps is not None else env.config.sim.max_episode_steps
+    task_budget = getattr(getattr(env, "task", None), "max_steps", None)
+    limit = (max_steps if max_steps is not None
+             else task_budget if task_budget is not None
+             else env.config.sim.max_episode_steps)
     frames: list[np.ndarray] = []
     success = False
     step = 0

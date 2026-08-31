@@ -201,7 +201,7 @@ def test_learning_rate_warms_up_then_decays():
 
 
 def test_validation_split_never_cuts_an_episode(tmp_path):
-    from tests.test_dataset import write_dataset
+    from test_dataset import write_dataset
     from handrobot.data.dataset import DemoDataset
 
     write_dataset(tmp_path, episodes=5, length=8)
@@ -238,7 +238,7 @@ def test_augmentation_is_reproducible_from_the_global_seed():
 
 def test_single_episode_dataset_still_writes_a_best_checkpoint(tmp_path):
     """With one episode there is nothing to validate on; best.pt must still exist."""
-    from tests.test_dataset import write_dataset
+    from test_dataset import write_dataset
     from handrobot.config import TrainConfig
     from handrobot.policy.train import train
 
@@ -260,7 +260,7 @@ def test_single_episode_dataset_still_writes_a_best_checkpoint(tmp_path):
 def test_training_runs_with_augmentation_on_and_off(tmp_path, augment):
     """Regression: without augmentation the batch stayed a permuted view, and the
     backward pass raised "view size is not compatible with input tensor's size"."""
-    from tests.test_dataset import write_dataset
+    from test_dataset import write_dataset
     from handrobot.config import TrainConfig
     from handrobot.policy.train import train
 
