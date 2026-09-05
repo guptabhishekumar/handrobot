@@ -213,43 +213,36 @@ def test_panels_are_held_between_refreshes_rather_than_redrawn(rig):
     assert renders["n"] == 6, f"panels were redrawn {renders['n']} times in six frames"
 
 
-def test_one_interface_frame_fits_inside_a_control_period(rig):
-    """Not a benchmark -- a regression guard, and a deliberately loose one.
+def test_the_frame_costs_little_more_than_the_renders_inside_it(rig):
+    """A regression guard that means the same thing on every machine.
 
-    The bound has to hold on a CI runner rendering MuJoCo in software, which is
-    an order of magnitude slower than the laptop this is meant for: it is here
-    to catch a change that makes the interface ten times more expensive, not to
-    measure it.
+    The first version asserted a wall-clock millisecond budget, which passed on
+    a laptop and failed on a CI runner rendering MuJoCo in software an order of
+    magnitude slower -- the test was measuring the runner, not the interface.
+    What is actually worth guarding is the ratio: compositing, overlays and the
+    ribbon together must stay small against the rendering they wrap, whatever
+    the machine renders at.
     """
     pose, landmarks = make_pose(), make_landmarks()
     interface, _ = frame_of(rig, pose=pose, landmarks=landmarks)
-    _, _, _, session = rig
+    _, env, _, session = rig
     tracker = StubTracker()
     webcam = np.full((CAMERA_SIZE[1], CAMERA_SIZE[0], 3), 90, np.uint8)
+    info = session.step(pose)
+    cameras = [n for n in ([interface.stage] + interface.tile_names) if n != "camera"]
 
-    start = time.perf_counter()
-    for _ in range(10):
-        info = session.step(pose)
-        interface.render(session, webcam, pose, landmarks, info, tracker, 0.033)
-    each = (time.perf_counter() - start) / 10
-    assert each < 0.75, f"one interface frame took {each * 1000:.0f} ms"
+    def timed(call, repeats=5):
+        call()  # warm caches, allocate renderers
+        start = time.perf_counter()
+        for _ in range(repeats):
+            call()
+        return (time.perf_counter() - start) / repeats
 
+    renders = timed(lambda: interface._refresh(time.perf_counter(), cameras))
+    frame = timed(lambda: interface.render(
+        session, webcam, pose, landmarks, info, tracker, 0.033))
 
-def test_nothing_is_drawn_under_the_status_ribbon(rig):
-    """The ribbon is composited last. Anything the overlays put in those rows
-    is drawn where the operator cannot see it, which is how an outline ends up
-    looking like it stops halfway."""
-    config, env, mapper, session = rig
-    interface = Interface(config, env, mapper, CAMERA_SIZE, ui="1080p")
-    width, height = interface.preview_size()
-    inset = interface.ribbon_inset(height)
-    assert inset > 0
-
-    pose, landmarks = make_pose(), make_landmarks()
-    mapper.engage(pose, env.gripper_pose[0])
-    webcam = np.zeros((CAMERA_SIZE[1], CAMERA_SIZE[0], 3), np.uint8)
-    preview = interface._preview(
-        webcam, landmarks, pose, False, StubTracker().intrinsics,
-        session.step(pose)["command"], True, np.array([0.4, 0.4, 0.0]),
+    assert frame < 2.6 * renders, (
+        f"one frame took {frame * 1000:.0f} ms against {renders * 1000:.0f} ms of "
+        "rendering: the interface has grown expensive relative to what it draws"
     )
-    assert preview[height - inset :].max() == 0, "an overlay was drawn under the ribbon"

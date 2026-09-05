@@ -16,6 +16,8 @@ def test_every_subcommand_has_a_handler():
     "argv",
     [
         ["info"],
+        ["warmup"],
+        ["warmup", "--force"],
         ["handcheck"],
         ["teleop"],
         ["collect-scripted", "--episodes", "3"],
@@ -58,3 +60,19 @@ def test_eval_defaults_to_the_scripted_expert():
 
 def test_teleop_recording_can_be_disabled():
     assert build_parser().parse_args(["teleop", "--no-record"]).no_record
+
+
+def test_warmup_builds_nothing_when_everything_is_already_there(capsys, monkeypatch):
+    """The step CI runs before the suite. It has to be a no-op on a warm tree,
+    or every run pays for assets it already has."""
+    from handrobot.cli import command_warmup
+
+    import handrobot.retarget.reach as reach
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("warmup rebuilt an asset that was already present")
+
+    monkeypatch.setattr(reach.ReachTable, "cached", refuse)
+    command_warmup(build_parser().parse_args(["warmup"]))
+    out = capsys.readouterr().out
+    assert "already there" in out and "ready" in out

@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-520%20passing-2e8b6e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-522%20passing-2e8b6e">
   <img alt="python" src="https://img.shields.io/badge/python-3.12-3776ab">
   <img alt="sim" src="https://img.shields.io/badge/sim-MuJoCo%203-orange">
   <img alt="policy" src="https://img.shields.io/badge/policy-ACT%20(from%20scratch)-8a2be2">
@@ -19,7 +19,7 @@ the task from your demonstrations and then does it alone.
   <b>95/100</b> multi-task unseen episodes &nbsp;·&nbsp;
   <b>30 Hz</b> hand-to-joints &nbsp;·&nbsp;
   <b>15.0 mm</b> neural fingertips vs a ≈14 mm physical ceiling &nbsp;·&nbsp;
-  <b>520</b> tests &nbsp;·&nbsp; <b>$0</b> hardware
+  <b>522</b> tests &nbsp;·&nbsp; <b>$0</b> hardware
 </p>
 
 Two arms: the [Franka Panda](https://frankarobotics.com) (default - seven
@@ -264,6 +264,12 @@ uv pip install -e ".[dev]"
 ./scripts/fetch_models.sh          # MediaPipe hand landmarker weights, ~8 MB
 .venv/bin/python -m handrobot info # should print all-ok
 ```
+
+The measured tables -- the reach table and the gripper calibrations -- are in
+the repository, because they are measurements of the models. The hand-to-LEAP
+retargeting network is not: it is trained from a fixed seed and takes a couple
+of minutes. It builds itself the first time anything asks for it, or
+`.venv/bin/python -m handrobot warmup` builds it deliberately.
 
 Python 3.12 specifically: MediaPipe has no wheels for 3.13 or newer.
 
@@ -585,7 +591,7 @@ flowchart LR
 .venv/bin/pytest -q
 ```
 
-520 tests. The ones that matter most are the ones that would let a silent
+522 tests. The ones that matter most are the ones that would let a silent
 physical error through:
 
 - `test_reach.py::test_declared_workspace_is_reachable` - fails if the declared

@@ -35,6 +35,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("info", help="print environment, device and asset status")
 
+    p = sub.add_parser(
+        "warmup",
+        help="build the measured tables and the retargeting network, if they are missing",
+    )
+    p.add_argument("--force", action="store_true", help="rebuild even if they exist")
+
     p = sub.add_parser("handcheck", help="webcam diagnostic: verify hand tracking and depth")
     p.add_argument("--device", type=int, default=0, help="camera index")
     p.add_argument("--hfov", type=float, default=None,
@@ -221,6 +227,44 @@ def command_info(args: argparse.Namespace) -> int:
               f"workspace {size[0]:.2f} x {size[1]:.2f} x {size[2]:.2f} m   "
               f"object {spec.cube_half_extent * 2000:.0f} mm")
     print("\n  * default. Choose with --robot.")
+    return 0
+
+
+def command_warmup(args: argparse.Namespace) -> int:
+    """Produce everything the code generates rather than ships.
+
+    Three things are measured or trained rather than written down: the reach
+    table, the gripper calibrations, and the hand-to-LEAP retargeting network.
+    All three build themselves on first use, which is fine on a laptop and
+    miserable anywhere else -- in a test run it looks like a slow test, and in
+    CI it looks like a mysterious ten-minute pause. Building them on purpose,
+    in one place, makes the cost visible and puts it where it belongs.
+    """
+    import time
+
+    from handrobot.dexhand.retarget_net import CHECKPOINT, train_retargeter
+    from handrobot.gripper import GripperCalibration, calibration_path
+    from handrobot.retarget.reach import DEFAULT_TABLE_PATH, ReachTable
+    from handrobot.robots import ROBOTS, get_robot
+
+    def stage(name: str, exists: bool, build) -> None:
+        if exists and not args.force:
+            print(f"  {name:22s} already there")
+            return
+        start = time.perf_counter()
+        build()
+        print(f"  {name:22s} built in {time.perf_counter() - start:.0f} s")
+
+    print("warming up generated assets")
+    stage("reach table", DEFAULT_TABLE_PATH.exists(),
+          lambda: ReachTable.cached(rebuild=True))
+    for name in sorted(ROBOTS):
+        spec = get_robot(name)
+        stage(f"{name} gripper", calibration_path(spec).exists(),
+              lambda spec=spec: GripperCalibration.cached(spec, rebuild=True))
+    stage("retargeting network", CHECKPOINT.exists(),
+          lambda: train_retargeter(log=False))
+    print("ready")
     return 0
 
 
@@ -571,6 +615,7 @@ def command_dataset(args: argparse.Namespace) -> int:
 
 COMMANDS = {
     "info": command_info,
+    "warmup": command_warmup,
     "handcheck": command_handcheck,
     "teleop": command_teleop,
     "collect-scripted": command_collect_scripted,

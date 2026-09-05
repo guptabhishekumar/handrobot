@@ -90,9 +90,13 @@ python3.12 -m venv .venv
 ## 4. Prove it works before touching the camera
 
 ```bash
-make test                                        # 520 tests, headless, ~6 min
+make warmup                                      # once: trains the hand-retargeting network (~3 min)
+make test                                        # 522 tests, headless, ~3 min
 .venv/bin/python -m handrobot eval --episodes 25 # scripted expert: expect 100%
 ```
+
+`make warmup` is optional — the tests build what they need on demand — but doing
+it first means the wait shows up as a build rather than as a slow test.
 
 The scripted expert exists so the physics, the grasp and the scoring are known-good
 *before* you spend ten minutes recording.

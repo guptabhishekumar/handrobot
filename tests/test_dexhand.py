@@ -35,7 +35,14 @@ def fk():
 
 @pytest.fixture(scope="module")
 def retargeter():
-    return load_retargeter(train_if_missing=False)
+    """The trained network, built on demand the first time.
+
+    It is generated rather than committed, so a fresh clone does not have one.
+    Refusing to build it turned that into three errors that looked like broken
+    tests; building it costs a couple of minutes once, and
+    ``python -m handrobot warmup`` exists to pay that cost deliberately.
+    """
+    return load_retargeter(train_if_missing=True)
 
 
 def test_differentiable_fk_matches_mujoco_exactly(fk):

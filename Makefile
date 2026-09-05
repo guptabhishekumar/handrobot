@@ -11,6 +11,9 @@ setup:               ## create venv, install, fetch tracker model
 	./scripts/fetch_models.sh
 	$(PY) -m handrobot info
 
+warmup:              ## build the measured tables and the retargeting network
+	$(PY) -m handrobot warmup
+
 check:               ## webcam diagnostic: can it see your hand?
 	$(PY) -m handrobot handcheck
 
@@ -46,4 +49,4 @@ baseline:            ## full reproducible pipeline without a camera (~60 min)
 test:                ## run the full suite (~2 min, headless)
 	$(PY) -m pytest -q
 
-.PHONY: help setup check teleop demo film dexhand dexhand-record train eval multitask baseline test
+.PHONY: help setup warmup check teleop demo film dexhand dexhand-record train eval multitask baseline test
