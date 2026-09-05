@@ -58,7 +58,8 @@ def run_handcheck(device: int = 0, seconds: float = 0.0, config: HandConfig | No
     import cv2
 
     from handrobot.hands.tracker import HandTracker, Webcam
-    from handrobot.viz.overlay import draw_hand_overlay
+    from handrobot.viz.overlay import draw_hand_overlay, hand_is_clipped
+    from handrobot.viz.roi import draw_depth_band, draw_frame_margin
 
     config = config or HandConfig()
     history: list[Landmarks] = []
@@ -85,7 +86,17 @@ def run_handcheck(device: int = 0, seconds: float = 0.0, config: HandConfig | No
                 pinches.append(pose.pinch_distance)
 
             preview = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            draw_hand_overlay(preview, landmarks, pose, engaged=pose is not None)
+            # The same two aids the teleoperation interface draws, because this
+            # is where the operator is meant to fix their setup: the border the
+            # detector degrades at, and the band of distances it works in.
+            draw_frame_margin(
+                preview, clipped=landmarks is not None and hand_is_clipped(landmarks)
+            )
+            draw_depth_band(
+                preview, None if pose is None else float(pose.depth),
+                config.depth_comfort, (config.depth_min, config.depth_max),
+            )
+            draw_hand_overlay(preview, landmarks, pose, engaged=pose is not None, axes=True)
             status = f"tracked {tracked}/{seen}"
             if pose is not None:
                 status += f"  depth {pose.depth:.2f} m  pinch {pose.pinch_distance * 1000:.0f} mm"

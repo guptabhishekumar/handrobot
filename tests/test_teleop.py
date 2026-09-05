@@ -370,3 +370,145 @@ def test_the_goal_switches_to_the_bin_once_the_cube_is_lifted(session):
 
     mujoco.mj_forward(session.env.model, session.env.data)
     assert session.alignment()["goal_name"] == "bin"
+
+
+# -- the interface around the session ----------------------------------------
+
+
+def test_interface_sizes_resolve_to_sixteen_by_nine():
+    from handrobot.teleop import UI_PRESETS, window_size
+
+    assert window_size(None) == UI_PRESETS["720p"]
+    assert window_size("8k") == (7680, 4320)
+    assert window_size("4K") == (3840, 2160)
+    width, height = window_size(1440)
+    assert (width, height) == (2560, 1440)
+    for name in UI_PRESETS:
+        w, h = window_size(name)
+        assert abs(w / h - 16 / 9) < 1e-6
+        assert w % 2 == 0 and h % 2 == 0
+
+
+def test_an_unreadable_or_unknown_interface_size_is_refused():
+    from handrobot.teleop import window_size
+
+    with pytest.raises(ValueError):
+        window_size("enormous")
+    with pytest.raises(ValueError):
+        window_size(200)
+
+
+def test_renders_never_exceed_the_offscreen_buffer(session):
+    """MuJoCo refuses to build a renderer larger than the model's framebuffer.
+
+    An interface asking for 4K panels would therefore not be slow, it would
+    raise on its first frame.
+    """
+    from handrobot.teleop import render_size
+
+    limit_h, limit_w = session.env.max_render_size
+    width, height = render_size(3776, 2100, (limit_h, limit_w))
+    assert width <= limit_w and height <= limit_h
+    assert abs((width / height) - (3776 / 2100)) < 0.02, "the panel was cropped, not scaled"
+    # And the environment itself clamps, so asking too much is never fatal.
+    image = session.env.render("front_cam", 4000, 4000)
+    assert image.shape[0] <= limit_h and image.shape[1] <= limit_w
+
+
+def test_the_render_cadence_follows_the_measured_loop():
+    from handrobot.teleop import RenderPacer
+
+    pacer = RenderPacer(budget_ms=33.0, settle=5)
+    for _ in range(200):
+        pacer.update(60.0)
+    assert pacer.cadence > 1, "an overrunning loop kept redrawing every frame"
+
+    for _ in range(400):
+        pacer.update(8.0)
+    assert pacer.cadence == 1, "a loop with headroom never returned to every frame"
+
+
+def test_the_render_cadence_cannot_oscillate():
+    from handrobot.teleop import RenderPacer
+
+    pacer = RenderPacer(budget_ms=33.0, settle=15)
+    changes = 0
+    previous = pacer.cadence
+    for i in range(300):
+        # Right on the budget, alternating either side of it.
+        pacer.update(33.0 + (6.0 if i % 2 else -6.0))
+        changes += pacer.cadence != previous
+        previous = pacer.cadence
+    assert changes <= 2, "the cadence chattered around the budget"
+
+
+def test_the_tracking_readout_reflects_now_not_the_whole_session():
+    """A session average cannot move after ten good minutes.
+
+    Which is exactly when an operator most needs to be told that tracking has
+    just collapsed.
+    """
+    from handrobot.teleop import TeleopStats
+
+    stats = TeleopStats()
+    for _ in range(1000):
+        stats.frames_seen += 1
+        stats.note_frame(True, None)
+    for _ in range(90):
+        stats.frames_seen += 1
+        stats.note_frame(False, "hand too close to the camera")
+
+    assert stats.tracking_rate > 0.9, "the session total should still look healthy"
+    assert stats.live_tracking_rate == 0.0
+    assert stats.live_rejection == "hand too close to the camera"
+
+
+def test_a_healthy_recent_window_says_nothing():
+    from handrobot.teleop import TeleopStats
+
+    stats = TeleopStats()
+    for i in range(90):
+        stats.frames_seen += 1
+        stats.note_frame(i % 20 != 0, "no hand in frame")
+    assert stats.live_tracking_rate > 0.9
+    assert stats.live_rejection is None, "normal frame loss must not nag"
+
+
+def test_a_saved_success_raises_the_banner(session):
+    session.mapper._engaged = True
+    session.step(make_pose())
+    assert session.flash == 0.0
+    session.save_episode(success=True)
+    assert session.flash == 1.0
+
+
+def test_a_saved_failure_raises_nothing(session):
+    session.mapper._engaged = True
+    session.step(make_pose())
+    session.save_episode(success=False)
+    assert session.flash == 0.0
+
+
+def test_a_message_stops_being_shown_once_it_is_stale(session, monkeypatch):
+    """Messages report what just happened. One still on screen a minute later
+    is describing a different moment, and nothing says which."""
+    import handrobot.teleop as teleop
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(teleop.time, "perf_counter", lambda: clock["now"])
+
+    session.message = "clutch engaged"
+    assert session.visible_message == "clutch engaged"
+    clock["now"] += session.MESSAGE_SECONDS + 1
+    assert session.visible_message == ""
+    assert session.message == "clutch engaged", "the message itself is still readable"
+
+
+def test_the_timeline_records_why_each_frame_was_poor():
+    from handrobot.teleop import TeleopStats
+
+    stats = TeleopStats()
+    stats.note_frame(True, None)
+    stats.note_frame(True, None, clipped=True)
+    stats.note_frame(False, "no hand in frame")
+    assert list(stats.recent_quality) == [1, 2, 0]

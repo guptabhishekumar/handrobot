@@ -50,6 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
                         "(default: runs/demos/<robot>_human)")
     p.add_argument("--device", type=int, default=0, help="camera index")
     p.add_argument("--no-record", action="store_true", help="drive without saving anything")
+    p.add_argument(
+        "--ui", type=str, default="720p",
+        help="interface size: 720p, 1080p, 1440p, 4k, 8k, or a height in pixels. "
+             "The window is resizable whatever this is; a larger frame keeps the "
+             "text and overlays sharp when the window is large.",
+    )
     p.add_argument("--view", type=str, default="chase_cam",
                    choices=["chase_cam", "front_cam", "hero_cam", "wrist_cam"],
                    help="lower simulator panel (the top view is always shown); "
@@ -257,6 +263,7 @@ def command_teleop(args: argparse.Namespace) -> int:
         sim_view=args.view,
         stereo_device=args.stereo_device,
         stereo_baseline=args.baseline,
+        ui=args.ui,
     )
     print(
         f"\nsaved {stats.episodes_saved} episodes "

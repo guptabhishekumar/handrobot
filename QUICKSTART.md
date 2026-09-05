@@ -90,7 +90,7 @@ python3.12 -m venv .venv
 ## 4. Prove it works before touching the camera
 
 ```bash
-make test                                        # 429 tests, headless, ~2 min
+make test                                        # 520 tests, headless, ~6 min
 .venv/bin/python -m handrobot eval --episodes 25 # scripted expert: expect 100%
 ```
 
@@ -147,8 +147,29 @@ toward the middle and it resumes instantly.
 | `d` | discard it and reset |
 | `h` | send the arm home |
 | `[` `]` | less / more sensitive to your hand |
-| `v` | cycle sim view (front / hero / wrist) |
+| `v` | put the next view on the big stage |
+| `w` | put the wrist view on the stage |
+| `t` | hide the tiles — the stage takes the whole window |
+| `?` | show the key list on screen |
 | `q` | quit |
+
+**What you are looking at**
+
+- **Green outline** on your camera — every hand position the arm can reach right
+  now. Inside it the arm follows; outside it the arm stops. It moves when you
+  re-clutch and shrinks when you raise sensitivity.
+- **Gauge on the right** — how far your hand is from the camera. Stay in the
+  green band; it says `COME CLOSER` or `MOVE BACK` when you drift out.
+- **Thin border** — where hand tracking starts to fail. Turns red before it does.
+- **Tiles** on the right — top, follow and wrist views. `v` swaps any of them
+  onto the big stage; `t` hides them for a full-window view.
+- **Hairline** along the very top — it marks only the frames tracking lost
+  (red) or your hand touched the frame edge (amber). Clean means clean.
+- **JAW gauge** in the ribbon — how far the jaws are open, with a tick at the
+  puck's real width. It has to pass the tick to go around the puck.
+
+Bigger screen? `.venv/bin/python -m handrobot teleop --ui 1080p` (also `1440p`,
+`4k`, `8k`, or a height in pixels). The window stays resizable either way.
 
 Set the sensitivity in the first thirty seconds: twitchy → `[`, having to reach
 across the room → `]`. It never jerks the arm.

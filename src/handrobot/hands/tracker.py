@@ -132,6 +132,19 @@ class HandTracker:
         """
         return {"right": "Left", "left": "Right"}[preference.lower()]
 
+    @property
+    def followed_hand(self) -> str | None:
+        """Which of the operator's own hands is being followed, or ``None``.
+
+        MediaPipe labels the hand it sees in the mirrored preview, so its
+        "Left" is the operator's right. Translating it here means the interface
+        never has to know that, and the two directions of the translation
+        cannot drift apart.
+        """
+        if self._followed is None:
+            return None
+        return {"Left": "right", "Right": "left"}.get(self._followed.handedness)
+
     def forget_hand(self) -> None:
         """Stop following whichever hand was being followed."""
         self._followed = None

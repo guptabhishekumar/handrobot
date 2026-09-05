@@ -91,10 +91,13 @@
     <camera name="front_cam" pos="1.12 0.02 0.46" mode="targetbody"
             target="workspace_anchor" fovy="40"/>
     <!-- Straight down over the workspace. Horizontal alignment is impossible to
-         judge from a side view, and left/right here matches front_cam. -->
-    <!-- Height and field of view chosen together so the 32 x 68 cm object
-         region exactly fills a panel of the interface's aspect ratio. -->
-    <camera name="top_cam" pos="0.50 0 0.78" xyaxes="0 1 0  -1 0 0" fovy="24"/>
+         judge from a side view, and left/right here matches front_cam.
+         The vertical field of view spans the table's x, the horizontal its y,
+         so the y extent is the one that has to fit: 74 cm of it, at 75 cm above
+         the table, in a 4:3 panel. Anything narrower crops the corners the
+         objects spawn in, and a top view that cannot show where the puck is is
+         not a top view. -->
+    <camera name="top_cam" pos="0.50 0 0.78" xyaxes="0 1 0  -1 0 0" fovy="41"/>
     <camera name="hero_cam" pos="1.16 0.86 0.66" mode="targetbody"
             target="hero_anchor" fovy="40"/>
 

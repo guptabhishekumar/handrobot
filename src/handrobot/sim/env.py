@@ -138,6 +138,10 @@ class PickPlaceEnv:
         look = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "chase_look")
         self._chase_eye = int(self.model.body_mocapid[eye]) if eye >= 0 else -1
         self._chase_look = int(self.model.body_mocapid[look]) if look >= 0 else -1
+        #: Damped aim point of the follow camera, and the simulated instant it
+        #: was last advanced to.
+        self._chase_target: np.ndarray | None = None
+        self._chase_time: float | None = None
 
         home = self.model.key(self.spec.home_key)
         self._home_qpos = home.qpos.copy()
@@ -217,6 +221,10 @@ class PickPlaceEnv:
             self.rng = np.random.default_rng(seed)
 
         mujoco.mj_resetData(self.model, self.data)
+        # The follow camera must not glide in from wherever the last episode
+        # ended; the scene it was watching no longer exists.
+        self._chase_target = None
+        self._chase_time = None
         self.data.qpos[:] = self._home_qpos
         self.data.ctrl[:] = self._home_ctrl
 
@@ -373,19 +381,85 @@ class PickPlaceEnv:
 
     # -- rendering ----------------------------------------------------------
 
+    @property
+    def max_render_size(self) -> tuple[int, int]:
+        """Largest ``(height, width)`` this model can render offscreen.
+
+        MuJoCo allocates one offscreen framebuffer per model, sized by
+        ``<global offwidth offheight>`` in the scene, and refuses to build a
+        renderer larger than it. Asking for a panel bigger than the buffer is
+        not a slow path, it is an exception -- which is exactly what a
+        high-resolution interface would do on its first frame. Callers ask for
+        what they want and get the largest honest answer.
+        """
+        return (int(self.model.vis.global_.offheight), int(self.model.vis.global_.offwidth))
+
     def _renderer(self, height: int, width: int) -> mujoco.Renderer:
+        limit_h, limit_w = self.max_render_size
+        height = max(1, min(int(height), limit_h))
+        width = max(1, min(int(width), limit_w))
         key = (height, width)
         if key not in self._renderers:
             self._renderers[key] = mujoco.Renderer(self.model, height=height, width=width)
         return self._renderers[key]
 
+    #: Seconds for the follow camera to cover most of the distance to the
+    #: gripper. A camera pinned rigidly to the tool inherits every tremor of the
+    #: arm, and a shaking view is read as a shaking robot: operators correct
+    #: against the camera and drive the very oscillation they can see. A first
+    #: order lag at roughly the arm's own settling time removes the tremor and
+    #: leaves the travel, which is the part worth watching.
+    CHASE_LAG = 0.12
+
+    #: Larger than this and the gripper has been teleported rather than driven
+    #: -- a reset, or a test setting joint angles directly. Chasing that
+    #: smoothly would leave the camera pointing at empty table for half a
+    #: second, so the rig snaps instead.
+    CHASE_SNAP = 0.15
+
+    @property
+    def chase_camera_pose(self) -> tuple[np.ndarray, np.ndarray] | None:
+        """Where the follow rig's eye and aim point currently are, or ``None``."""
+        if self._chase_eye < 0 or self._chase_look < 0:
+            return None
+        return (
+            self.data.mocap_pos[self._chase_eye].copy(),
+            self.data.mocap_pos[self._chase_look].copy(),
+        )
+
     def update_chase_camera(self) -> None:
-        """Pin the chase rig to the gripper's current position."""
+        """Move the follow rig towards the gripper, once per simulated instant.
+
+        Idempotent within a frame on purpose. The panel is rendered through this
+        camera and then drawn on with points projected through it; if the second
+        call advanced the filter, every overlay would be drawn for a camera pose
+        that no longer matched the picture underneath it.
+        """
         if self._chase_eye < 0 or self._chase_look < 0:
             return
         tcp, _ = self.gripper_pose
-        self.data.mocap_pos[self._chase_look] = tcp
-        self.data.mocap_pos[self._chase_eye] = tcp + np.asarray(self.spec.chase_offset)
+        offset = np.asarray(self.spec.chase_offset, dtype=float)
+
+        now = float(self.data.time)
+        target = np.asarray(tcp, dtype=float)
+        travel = (
+            float("inf") if self._chase_target is None
+            else float(np.linalg.norm(target - self._chase_target))
+        )
+        if travel > self.CHASE_SNAP:
+            # Teleported, not driven -- a reset, or joint angles set directly.
+            # Gliding to it would leave the camera pointing at empty table.
+            self._chase_target = target.copy()
+        elif self._chase_time is not None and now != self._chase_time:
+            dt = abs(now - self._chase_time)
+            alpha = 1.0 if dt > 1.0 else 1.0 - float(np.exp(-dt / self.CHASE_LAG))
+            self._chase_target = self._chase_target + alpha * (target - self._chase_target)
+        # Anything else is a second call within the same instant: the rig holds
+        # exactly where the render that is about to be drawn on saw it.
+        self._chase_time = now
+
+        self.data.mocap_pos[self._chase_look] = self._chase_target
+        self.data.mocap_pos[self._chase_eye] = self._chase_target + offset
         # Mocap positions only reach body poses through kinematics, and camera
         # poses only follow from there. Without both, the chase view renders one
         # frame late and any projection through it is simply wrong.

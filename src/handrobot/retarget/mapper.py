@@ -247,6 +247,31 @@ class HandToGripper:
         self._park_point = smoothed.copy()
         self._engaged = True
 
+    @property
+    def hand_anchor(self) -> np.ndarray | None:
+        """Hand position the mapping is currently anchored to, if engaged."""
+        return None if self._hand_anchor is None else self._hand_anchor.copy()
+
+    @property
+    def robot_anchor(self) -> np.ndarray | None:
+        """Gripper position the mapping is currently anchored to, if engaged."""
+        return None if self._robot_anchor is None else self._robot_anchor.copy()
+
+    @property
+    def tracked_hand(self) -> np.ndarray | None:
+        """Latest smoothed hand position, engaged or not.
+
+        The interface draws the reachable region around this while the clutch is
+        released, which is how the operator can see where they will be able to
+        go *before* they commit to an anchor.
+        """
+        return None if self._last_hand is None else self._last_hand.copy()
+
+    @property
+    def command_position(self) -> np.ndarray | None:
+        """Last position commanded to the gripper, if any."""
+        return None if self._filtered_position is None else self._filtered_position.copy()
+
     def disengage(self) -> None:
         """Stop tracking. The gripper holds its last command."""
         self._hand_anchor = None

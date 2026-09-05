@@ -204,6 +204,14 @@ class HandConfig:
     depth_min: float = 0.15
     depth_max: float = 1.60
 
+    #: The narrower band the operator should actually work in, in metres.
+    #: Not a rejection threshold -- a target. Depth is fitted from how large the
+    #: palm is on screen, so its error grows with the square of the distance,
+    #: while a hand held very close leaves the frame the moment it moves. The
+    #: band is where neither dominates, and the interface says which way to move
+    #: to get back into it.
+    depth_comfort: tuple[float, float] = (0.30, 0.80)
+
     #: A gap in tracking longer than this re-anchors the mapping instead of
     #: following the hand to wherever it reappeared. Losing the hand is exactly
     #: like lifting a mouse: when it comes back, the arm should stay where it

@@ -209,3 +209,82 @@ def test_skipping_rendering_does_not_change_the_physics(env):
         env.step(hold, observe=True)
     assert np.allclose(env.cube_position, without[0], atol=1e-9)
     assert np.allclose(env.joint_positions, without[1], atol=1e-9)
+
+
+# -- the follow camera -------------------------------------------------------
+
+
+def test_the_follow_camera_holds_still_within_one_frame(env):
+    """The panel is rendered through this camera and then drawn on with points
+    projected through it. If the second call moved the rig, every overlay would
+    be drawn for a camera pose that no longer matched the picture underneath."""
+    env.reset(seed=0)
+    env.update_chase_camera()
+    first = env.chase_camera_pose
+    env.update_chase_camera()
+    second = env.chase_camera_pose
+    assert np.allclose(first[0], second[0])
+    assert np.allclose(first[1], second[1])
+
+
+def test_the_follow_camera_lags_the_gripper_instead_of_copying_it(env):
+    env.reset(seed=0)
+    env.update_chase_camera()
+    start = env.chase_camera_pose[1].copy()
+
+    action = env.commanded_positions.copy()
+    action[1] += 0.12
+    for _ in range(3):
+        env.step(action, observe=False)
+    tcp, _ = env.gripper_pose
+    travelled = float(np.linalg.norm(tcp - start))
+    assert 1e-3 < travelled < env.CHASE_SNAP, "the arm did not move a usable amount"
+
+    env.update_chase_camera()
+    look = env.chase_camera_pose[1]
+    followed = float(np.linalg.norm(look - start))
+    assert 0 < followed < travelled, "the camera either froze or copied the gripper exactly"
+
+
+def test_the_follow_camera_removes_tremor_rather_than_amplifying_it(env, monkeypatch):
+    """A camera pinned rigidly to the tool inherits every tremor of the arm, and
+    operators correct against what they see -- which drives the oscillation they
+    are trying to remove."""
+    from handrobot.sim.env import PickPlaceEnv
+
+    env.reset(seed=0)
+    base, _ = env.gripper_pose
+    holder = {"position": base.copy()}
+    monkeypatch.setattr(
+        PickPlaceEnv, "gripper_pose",
+        property(lambda self: (holder["position"].copy(), np.eye(3))),
+    )
+    env.update_chase_camera()
+
+    amplitude = 0.005
+    excursions = []
+    for i in range(40):
+        holder["position"] = base + np.array([0.0, 0.0, amplitude * (1 if i % 2 else -1)])
+        env.data.time += 1.0 / 30.0
+        env.update_chase_camera()
+        if i > 10:
+            excursions.append(abs(env.chase_camera_pose[1][2] - base[2]))
+
+    assert max(excursions) < 0.4 * amplitude, "the camera followed the tremor"
+
+
+def test_the_follow_camera_snaps_when_the_scene_is_reset(env):
+    env.reset(seed=0)
+    env.update_chase_camera()
+    before = env.chase_camera_pose[1].copy()
+    env.reset(seed=7)
+    action = env.commanded_positions.copy()
+    action[1] += 0.6
+    for _ in range(10):
+        env.step(action, observe=False)
+    tcp, _ = env.gripper_pose
+    env.update_chase_camera()
+    assert np.linalg.norm(env.chase_camera_pose[1] - tcp) < 1e-9, (
+        "the camera glided in from the previous episode"
+    )
+    assert not np.allclose(before, env.chase_camera_pose[1])

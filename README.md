@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-428%20passing-2e8b6e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-520%20passing-2e8b6e">
   <img alt="python" src="https://img.shields.io/badge/python-3.12-3776ab">
   <img alt="sim" src="https://img.shields.io/badge/sim-MuJoCo%203-orange">
   <img alt="policy" src="https://img.shields.io/badge/policy-ACT%20(from%20scratch)-8a2be2">
@@ -19,7 +19,7 @@ the task from your demonstrations and then does it alone.
   <b>95/100</b> multi-task unseen episodes &nbsp;·&nbsp;
   <b>30 Hz</b> hand-to-joints &nbsp;·&nbsp;
   <b>15.0 mm</b> neural fingertips vs a ≈14 mm physical ceiling &nbsp;·&nbsp;
-  <b>428</b> tests &nbsp;·&nbsp; <b>$0</b> hardware
+  <b>520</b> tests &nbsp;·&nbsp; <b>$0</b> hardware
 </p>
 
 Two arms: the [Franka Panda](https://frankarobotics.com) (default - seven
@@ -328,8 +328,53 @@ exclusive; `v` cycles the lower panel.
 | `d`     | discard it and reset |
 | `h`     | send the arm home |
 | `[` `]` | make the arm less / more sensitive to your hand |
-| `v`     | cycle the simulator view (front / hero / wrist) |
+| `v`     | put the next view on the stage (follow / front / wide / wrist) |
+| `w`     | put the wrist view on the stage |
+| `t`     | hide the tiles - the stage takes the whole window |
+| `?`     | show the key list on screen |
 | `q`     | quit |
+
+<details><summary><b>The three things drawn on your own camera</b> (click)</summary>
+
+Teleoperation through a webcam fails in three ways that look identical from the
+operator's side - the arm simply stops responding. The hand has moved somewhere
+the arm cannot follow; the hand has drifted to the edge of the frame, where the
+detector degrades; or the hand is too close to or too far from the camera for
+the depth fit. None of them are visible in a camera image, so they are drawn
+into it.
+
+- **The reach envelope** - the green outline - is not an illustration. The
+  mapping from hand to robot is affine while the clutch holds, so inverting it
+  turns the arm's reachable region into a set of *hand* positions, projected
+  through the same pinhole model that produced the hand pose. Inside the outline
+  the arm follows, outside it the arm stops, and
+  `tests/test_roi.py::test_inside_the_outline_means_the_arm_will_follow` sweeps a
+  grid of hand positions checking exactly that agreement. It moves when you
+  re-clutch and shrinks when you raise the sensitivity, because the region it
+  describes does.
+- **The depth gauge** on the right places your hand in the band where monocular
+  depth is worth trusting: the fit's error grows with the square of the
+  distance, while a hand held very close leaves the frame the moment it moves.
+- **The margin rectangle** marks where the detector starts to degrade, before
+  it does rather than after.
+
+</details>
+
+The interface is one large stage with a column of tiles beside it, the way
+anything that watches several cameras at once is laid out: attention is not
+divisible, so the layout does not divide it either. Any view can be swapped onto
+the stage, and the status ribbon lies *over* the stage rather than taking a band
+of its own. Overlays are clipped to the picture and shown only while they say
+something - the reach outline while the clutch is engaged, the frame border only
+once the hand is at it, the tracking hairline only for frames that were lost.
+
+The interface is drawn in logical units and composed at whatever size is asked
+for - `--ui 1080p`, `1440p`, `4k`, `8k`, or a height in pixels - so text and
+overlays are *drawn* larger rather than upscaled. Simulator panels are clamped
+to the model's offscreen buffer and the panel redraw rate is measured and
+adapted: rendering is the only cost in a control period that can be spent
+selectively, and a panel held for one extra frame is invisible where a control
+period that overran is not.
 
 Start at the default sensitivity and adjust with `[` and `]` in the first thirty
 seconds. Too twitchy means lower it; having to reach across the room means raise
@@ -540,7 +585,7 @@ flowchart LR
 .venv/bin/pytest -q
 ```
 
-428 tests. The ones that matter most are the ones that would let a silent
+520 tests. The ones that matter most are the ones that would let a silent
 physical error through:
 
 - `test_reach.py::test_declared_workspace_is_reachable` - fails if the declared

@@ -14,7 +14,9 @@ Controls
 ``d``      discard the current episode and reset.
 ``h``      send the arm back to its home pose.
 ``[`` ``]``  make the arm less or more sensitive to your hand.
-``v``      swap the lower simulator panel (chase, front, hero, wrist).
+``v``      swap the lower simulator panel (follow, front, wide, wrist).
+``w``      show or hide the wrist picture-in-picture.
+``?``      show or hide the key list.
 ``q``      quit.
 
 Everything happens in one window: the camera on the left, the simulator on the
@@ -29,6 +31,7 @@ An episode that reaches the success condition is saved automatically.
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,12 +42,19 @@ from handrobot.data.dataset import EpisodeWriter
 from handrobot.filters import RateLimiter
 from handrobot.gripper import GripperCalibration
 from handrobot.hands.tracker import HandTracker, Webcam
-from handrobot.hands.types import HandPose
+from handrobot.hands.types import INDEX_TIP, THUMB_TIP, HandPose
 from handrobot.retarget.ik import ArmIK
 from handrobot.retarget.mapper import HandToGripper
 from handrobot.retarget.grasp import GraspFrames
 from handrobot.sim.env import PickPlaceEnv
-from handrobot.viz.hud import GAP, STRIP_HEIGHT, HudState, compose, draw_scene_overlays
+from handrobot.viz.hud import (
+    REFERENCE_HEIGHT,
+    HudState,
+    compose,
+    draw_scene_overlays,
+    panel_geometry,
+    view_label,
+)
 from handrobot.viz.overlay import draw_hand_overlay, hand_is_clipped
 
 
@@ -70,10 +80,33 @@ class TeleopStats:
     #: How often each rejection reason has come up, so the operator can be told
     #: what to change rather than just that something is wrong.
     rejections: dict[str, int] = field(default_factory=dict)
+    #: The last few seconds of frames, and why the failed ones failed. The
+    #: session totals are the honest summary at the end, but they are the wrong
+    #: thing to *display*: after ten good minutes a session average cannot move,
+    #: so an operator whose tracking has just collapsed sees a healthy number.
+    #: Three seconds is long enough to average out a blink and short enough to
+    #: react to.
+    live_window: int = 90
+    recent_tracked: deque = field(default_factory=lambda: deque(maxlen=90))
+    recent_rejections: deque = field(default_factory=lambda: deque(maxlen=90))
+    #: Per-frame quality for the on-screen timeline: 1 tracked, 2 tracked at
+    #: the frame edge, 0 lost.
+    recent_quality: deque = field(default_factory=lambda: deque(maxlen=240))
 
     def note_rejection(self, reason: str | None) -> None:
         if reason:
             self.rejections[reason] = self.rejections.get(reason, 0) + 1
+
+    def note_frame(self, tracked: bool, reason: str | None, clipped: bool = False) -> None:
+        """Record the outcome of one camera frame, for the totals and the window."""
+        self.recent_tracked.append(bool(tracked))
+        self.recent_quality.append(0 if not tracked else (2 if clipped else 1))
+        if tracked:
+            self.frames_tracked += 1
+            self.recent_rejections.append(None)
+        else:
+            self.note_rejection(reason)
+            self.recent_rejections.append(reason)
 
     @property
     def top_rejection(self) -> tuple[str, int] | None:
@@ -84,6 +117,30 @@ class TeleopStats:
     @property
     def tracking_rate(self) -> float:
         return self.frames_tracked / max(self.frames_seen, 1)
+
+    @property
+    def live_tracking_rate(self) -> float:
+        """Fraction of the last few seconds of frames that produced a pose."""
+        if not self.recent_tracked:
+            return self.tracking_rate
+        return sum(self.recent_tracked) / len(self.recent_tracked)
+
+    @property
+    def live_rejection(self) -> str | None:
+        """The commonest recent reason for losing frames, while it is worth saying.
+
+        Silent above 85% tracked: a handful of dropped frames is normal, and an
+        interface that complains about normal is one the operator stops reading.
+        """
+        if self.live_tracking_rate >= 0.85:
+            return None
+        reasons: dict[str, int] = {}
+        for reason in self.recent_rejections:
+            if reason:
+                reasons[reason] = reasons.get(reason, 0) + 1
+        if not reasons:
+            return None
+        return max(reasons.items(), key=lambda item: item[1])[0]
 
     @property
     def fps(self) -> float:
@@ -135,11 +192,40 @@ class TeleopSession:
         self.recording = False
         self.episode_steps = 0
         self.last_success = False
-        self.message = "press n to start an episode"
+        self._message = ""
+        self._message_time = 0.0
+        self.message = "press N to start an episode"
+        #: Fades from 1 to 0 after a success, driving the on-screen banner. A
+        #: saved success is the only thing that happens without being asked for,
+        #: and an operator who misses it repeats an episode that already counted.
+        self.flash = 0.0
         self._q = env.joint_positions.copy()
         self._seed: int | None = None
         self._operator_frame: np.ndarray | None = None
         self._homing = False
+
+    #: Seconds a message stays on the strip. Messages report what just
+    #: happened; one still sitting there a minute later is describing a
+    #: different moment, and the operator has no way of knowing which.
+    MESSAGE_SECONDS = 6.0
+
+    @property
+    def message(self) -> str:
+        return self._message
+
+    @message.setter
+    def message(self, text: str) -> None:
+        self._message = text
+        self._message_time = time.perf_counter()
+
+    @property
+    def visible_message(self) -> str:
+        """The message, while it is still describing the present."""
+        if not self._message:
+            return ""
+        if time.perf_counter() - self._message_time > self.MESSAGE_SECONDS:
+            return ""
+        return self._message
 
     # -- episode control ----------------------------------------------------
 
@@ -185,8 +271,10 @@ class TeleopSession:
         self.stats.episodes_saved += 1
         self.stats.successes += int(success)
         self.recording = False
+        if success:
+            self.flash = 1.0
         self.message = (
-            f"saved {path.name} ({'success' if success else 'failure'}) - press n for the next"
+            f"saved {path.name} ({'success' if success else 'failure'}) - press N for the next"
         )
 
     def discard_episode(self) -> None:
@@ -384,20 +472,430 @@ class TeleopSession:
         self.message = "clutch released"
 
 
+#: Interface sizes, all 16:9. The composed frame is what everything is drawn
+#: into; the window showing it can be any size, because OpenCV scales it. A
+#: larger frame does not mean a larger window -- it means text and overlays that
+#: stay sharp when the window is large, and a recording that is worth keeping.
+UI_PRESETS: dict[str, tuple[int, int]] = {
+    "720p": (1280, 720),
+    "1080p": (1920, 1080),
+    "1440p": (2560, 1440),
+    "4k": (3840, 2160),
+    "8k": (7680, 4320),
+}
+
+#: Size of the composed interface when nothing else is asked for.
+WINDOW_WIDTH, WINDOW_HEIGHT = UI_PRESETS["720p"]
+
+#: Seconds a success banner takes to fade out.
+FLASH_SECONDS = 1.6
+
+#: The order ``v`` cycles the lower simulator panel through.
+SIM_VIEWS = ("chase_cam", "front_cam", "hero_cam", "wrist_cam")
+
+
+def window_size(ui: str | int | None) -> tuple[int, int]:
+    """Resolve a size for the composed interface.
+
+    Accepts a preset name, a height in pixels, or nothing. A bare height is
+    completed to 16:9 and rounded to an even number of pixels, because half a
+    pixel of panel is a row of grey down the middle of the window.
+    """
+    if ui is None:
+        return UI_PRESETS["720p"]
+    if isinstance(ui, str):
+        key = ui.strip().lower()
+        if key in UI_PRESETS:
+            return UI_PRESETS[key]
+        if key.isdigit():
+            ui = int(key)
+        else:
+            raise ValueError(
+                f"unknown interface size {ui!r}; choose from "
+                f"{', '.join(UI_PRESETS)} or give a height in pixels"
+            )
+    height = int(ui)
+    if height < 360:
+        raise ValueError(f"interface height {height} is too small to read; 360 is the minimum")
+    height -= height % 2
+    width = int(round(height * 16 / 9))
+    return width - width % 2, height
+
+
+class RenderPacer:
+    """Decides how often the simulator panels are redrawn.
+
+    The control loop is paced by the webcam, and everything in one period --
+    detection, inverse kinematics, physics, three rendered views, compositing --
+    has to fit inside it. Rendering is the only part that can be spent
+    selectively, and it is also the only part the operator does not feel
+    directly: a panel held for one extra frame looks the same, while a control
+    period that overruns shows up as an arm that lags the hand.
+
+    So the cadence is measured, not assumed. A fast machine redraws every frame;
+    a slow one degrades a view at a time instead of dropping control frames. The
+    hysteresis and the settle count exist so the cadence cannot oscillate, which
+    is far more visible than either cadence on its own.
+    """
+
+    def __init__(self, budget_ms: float = 1000.0 / 30.0, minimum: int = 1,
+                 maximum: int = 4, settle: int = 15) -> None:
+        self.budget_ms = float(budget_ms)
+        self.minimum = int(minimum)
+        self.maximum = int(maximum)
+        self.settle = int(settle)
+        self.cadence = self.minimum
+        self._average: float | None = None
+        self._since_change = 0
+
+    @property
+    def average_ms(self) -> float:
+        return float(self._average) if self._average is not None else 0.0
+
+    def update(self, loop_ms: float) -> int:
+        """Fold in one measured control period and return the cadence to use."""
+        loop_ms = float(loop_ms)
+        self._average = loop_ms if self._average is None else 0.85 * self._average + 0.15 * loop_ms
+        self._since_change += 1
+        if self._since_change < self.settle:
+            return self.cadence
+        if self._average > self.budget_ms * 1.08 and self.cadence < self.maximum:
+            self.cadence += 1
+            self._since_change = 0
+        elif self._average < self.budget_ms * 0.72 and self.cadence > self.minimum:
+            self.cadence -= 1
+            self._since_change = 0
+        return self.cadence
+
+
+def render_size(width: int, height: int, limit: tuple[int, int]) -> tuple[int, int]:
+    """Largest render of this shape that fits the offscreen buffer.
+
+    Scaled rather than cropped: a panel that fits by being cut off is a panel
+    showing a different part of the scene than the one the overlays were
+    projected for.
+    """
+    limit_h, limit_w = limit
+    factor = min(1.0, limit_w / max(width, 1), limit_h / max(height, 1))
+    return max(1, int(width * factor)), max(1, int(height * factor))
+
+
+class Interface:
+    """Everything the operator sees, assembled from one camera frame.
+
+    One stage and a column of tiles. Every tool that watches several cameras at
+    once -- a drone controller, a robot tablet, a streaming desk -- lays them
+    out this way, because attention is not divisible: two half-sized views are
+    not twice as useful as one, they are two things nobody is looking at
+    properly. The stage is whatever the operator is working from, the tiles are
+    there to be glanced at, and ``v`` swaps them.
+
+    The overlays follow the same rule. Everything drawn on the stage has to earn
+    its lines: the reach outline appears when the clutch is engaged and matters,
+    the frame border appears when the hand is actually near it, the distance
+    word appears when the distance is wrong. A picture covered in permanent
+    guides is a picture nobody reads.
+
+    Split from the loop deliberately: the loop owns the two things that cannot
+    run without hardware -- a webcam and a window -- and this owns the pixels,
+    so the whole interface can be driven from synthetic poses in a test.
+    """
+
+    #: What the stage can show, in the order ``v`` cycles them.
+    STAGES = ("camera",) + SIM_VIEWS
+    #: The tiles, in the order they are stacked. Whichever is on the stage is
+    #: dropped from the column rather than shown twice.
+    TILES = ("camera", "top_cam", "chase_cam", "wrist_cam")
+
+    def __init__(
+        self,
+        config: Config,
+        env: PickPlaceEnv,
+        mapper: HandToGripper,
+        camera_size: tuple[int, int] = (640, 480),
+        ui: str | int | None = None,
+        sim_view: str = "chase_cam",
+    ) -> None:
+        from handrobot.viz.roi import ReachEnvelope
+
+        self.config = config
+        self.env = env
+        self.mapper = mapper
+        self.width, self.height = window_size(ui)
+        self.scale = max(0.25, self.height / REFERENCE_HEIGHT)
+
+        self.stage = "camera"
+        self.preferred_view = sim_view if sim_view in SIM_VIEWS else "chase_cam"
+        self.show_help = False
+        #: The tile column can be dropped entirely, which is the operator asking
+        #: for every pixel in the window on the one view they are working from.
+        self.show_tiles = True
+
+        self.layout = panel_geometry(self.width, self.height, self.scale, tiles=3)
+        limit = env.max_render_size
+        # Panels are rendered at the size they are drawn at, clamped to the
+        # model's offscreen buffer -- MuJoCo refuses to build a renderer larger
+        # than it, so an unclamped 4K stage is not a slow interface but an
+        # exception on the first frame.
+        self.stage_render = render_size(
+            self.layout["stage_width"], self.layout["stage_height"], limit
+        )
+        self.full_render = render_size(self.width, self.height, limit)
+        self.tile_render = render_size(
+            self.layout["column_width"], self.layout["tile_height"], limit
+        )
+
+        camera_width, camera_height = camera_size
+        self.camera_width = int(camera_width)
+        self.camera_height = int(camera_height)
+
+        self.pacer = RenderPacer(budget_ms=1000.0 / config.sim.control_hz)
+        self.envelope = ReachEnvelope(
+            workspace=config.workspace,
+            camera_to_robot=HandToGripper.CAMERA_TO_ROBOT,
+            intrinsics=None,
+        )
+        self._rendered: dict[str, np.ndarray] = {}
+        self._frame_index = 0
+        self._view_stamps: list[float] = []
+
+    # -- what is on screen --------------------------------------------------
+
+    @property
+    def lower_view(self) -> str:
+        """The simulator view the operator is working from."""
+        return self.stage if self.stage in SIM_VIEWS else self.preferred_view
+
+    @property
+    def tile_names(self) -> list[str]:
+        if not self.show_tiles:
+            return []
+        return [name for name in self.TILES if name != self.stage]
+
+    @property
+    def stage_size(self) -> tuple[int, int]:
+        """Pixels the stage is rendered at, which depends on the column being there."""
+        return self.stage_render if self.show_tiles else self.full_render
+
+    def preview_size(self) -> tuple[int, int]:
+        """Pixels the webcam preview is drawn at.
+
+        Never more than twice the webcam's own resolution: past that the
+        upscale invents nothing and only costs the memory bandwidth the control
+        loop needs.
+        """
+        if self.stage == "camera":
+            box = self.layout["stage_width"] if self.show_tiles else self.width
+        else:
+            box = self.layout["column_width"]
+        width = min(box, 2 * self.camera_width)
+        return width, max(1, round(width * self.camera_height / max(self.camera_width, 1)))
+
+    def handle_key(self, key: int, session: "TeleopSession") -> bool:
+        """Consume a key that only changes what is displayed. True if it was ours."""
+        if key == ord("v"):
+            self.stage = self.STAGES[(self.STAGES.index(self.stage) + 1) % len(self.STAGES)]
+            if self.stage in SIM_VIEWS:
+                self.preferred_view = self.stage
+            self._rendered.clear()
+            session.message = (
+                "stage: your hand" if self.stage == "camera"
+                else f"stage: {view_label(self.stage).lower()}"
+            )
+            return True
+        if key == ord("w"):
+            # The wrist is a tile like any other; hiding it is cycling past it.
+            self.stage = "wrist_cam" if self.stage != "wrist_cam" else "camera"
+            self._rendered.clear()
+            session.message = f"stage: {'wrist view' if self.stage == 'wrist_cam' else 'your hand'}"
+            return True
+        if key == ord("t"):
+            self.show_tiles = not self.show_tiles
+            self._rendered.clear()
+            session.message = "tiles on" if self.show_tiles else "tiles off - full window"
+            return True
+        if key in (ord("?"), ord("/")):
+            self.show_help = not self.show_help
+            return True
+        return False
+
+    # -- pixels -------------------------------------------------------------
+
+    def ribbon_inset(self, preview_height: int) -> int:
+        """Rows of the preview the status ribbon will end up lying over.
+
+        The ribbon is drawn on the composed frame, after this; anything put in
+        those rows is drawn where the operator cannot see it.
+        """
+        stage_height = max(1, self.layout["stage_height"])
+        return int(round(self.layout["ribbon_height"] * preview_height / stage_height))
+
+    def _preview(self, frame_rgb: np.ndarray, landmarks, pose, clipped: bool,
+                 intrinsics, command, on_stage: bool, hand_move) -> np.ndarray:
+        import cv2
+
+        from handrobot.viz.roi import draw_envelope, draw_frame_margin
+        from handrobot.viz.hud import draw_guidance_arrow
+
+        width, height = self.preview_size()
+        preview = cv2.cvtColor(
+            cv2.resize(frame_rgb, (width, height), interpolation=cv2.INTER_LINEAR),
+            cv2.COLOR_RGB2BGR,
+        )
+        unit = max(1.0, width / 640.0)
+        inset = self.ribbon_inset(height) if on_stage else 0
+
+        # Only when the hand is actually at the border it warns about.
+        if clipped:
+            draw_frame_margin(preview, clipped=True)
+
+        if self.mapper.engaged and intrinsics is not None:
+            self.envelope.intrinsics = intrinsics
+            anchor_robot = self.mapper.robot_anchor
+            if anchor_robot is None:
+                anchor_robot = (
+                    command.position if command is not None else self.env.gripper_pose[0]
+                )
+            plane_x = float(anchor_robot[0] if command is None else command.position[0])
+            polygons = self.envelope.polygons(
+                self.mapper.hand_anchor, anchor_robot, self.mapper.position_gain, plane_x
+            )
+            if polygons:
+                zoom = width / max(self.camera_width, 1)
+                draw_envelope(preview, [p * zoom for p in polygons],
+                              saturated=getattr(self.mapper, "saturated", False),
+                              bottom_inset=inset)
+
+        draw_hand_overlay(preview, landmarks, pose, engaged=self.mapper.engaged)
+
+        if pose is not None:
+            low, high = self.config.hand.depth_comfort
+            if not low <= pose.depth <= high:
+                word = "MOVE BACK FROM THE CAMERA" if pose.depth < low else "COME CLOSER"
+                cv2.putText(preview, word, (round(16 * unit), round(30 * unit)),
+                            cv2.FONT_HERSHEY_DUPLEX, 0.6 * unit, (70, 190, 250),
+                            max(1, round(unit)), cv2.LINE_AA)
+
+        # The correction, drawn at the hand rather than in the corner.
+        if on_stage and self.mapper.engaged and pose is not None and landmarks is not None:
+            pinch = landmarks.image[[THUMB_TIP, INDEX_TIP], :2].mean(axis=0)
+            draw_guidance_arrow(
+                preview, (pinch[0] * width, pinch[1] * height),
+                None if hand_move is None else hand_move * 1000, unit,
+                bottom_inset=inset,
+            )
+        return preview
+
+    def _refresh(self, now: float, needed: list[str]) -> None:
+        import cv2
+
+        for name in needed:
+            width, height = (self.stage_size if name == self.stage else self.tile_render)
+            self._rendered[name] = cv2.cvtColor(
+                self.env.render(name, height, width), cv2.COLOR_RGB2BGR
+            )
+        self._view_stamps.append(now)
+        if len(self._view_stamps) > 30:
+            self._view_stamps.pop(0)
+
+    @property
+    def view_hz(self) -> float | None:
+        if len(self._view_stamps) < 2:
+            return None
+        span = self._view_stamps[-1] - self._view_stamps[0]
+        return (len(self._view_stamps) - 1) / span if span > 0 else None
+
+    def render(self, session: "TeleopSession", frame_rgb: np.ndarray, pose, landmarks,
+               info: dict, tracker, elapsed: float, now: float | None = None) -> np.ndarray:
+        """Compose one interface frame from the state of one control period."""
+        now = time.perf_counter() if now is None else now
+        alignment = info.get("alignment") or {}
+        command = info.get("command")
+        clipped = landmarks is not None and hand_is_clipped(landmarks)
+
+        preview = self._preview(
+            frame_rgb, landmarks, pose, clipped, getattr(tracker, "intrinsics", None),
+            command, self.stage == "camera", alignment.get("hand_move"),
+        )
+
+        cameras = [name for name in ([self.stage] + self.tile_names) if name != "camera"]
+        if not self._rendered or self._frame_index % self.pacer.cadence == 0:
+            self._refresh(now, cameras)
+        self._frame_index += 1
+
+        tcp = self.env.gripper_pose[0]
+        goal = alignment.get("goal")
+        drawn = {
+            name: draw_scene_overlays(self._rendered[name], self.env, name, tcp, goal,
+                                      show_arrow=(name == self.stage))
+            for name in cameras
+        }
+
+        stage = preview if self.stage == "camera" else drawn[self.stage]
+        stage_label = ("YOUR HAND" if self.stage == "camera" else view_label(self.stage))
+        tiles = [
+            (preview if name == "camera" else drawn[name],
+             "YOUR HAND" if name == "camera" else view_label(name))
+            for name in self.tile_names
+        ]
+
+        state = HudState(
+            engaged=self.mapper.engaged,
+            recording=session.recording,
+            episode_steps=session.episode_steps,
+            saved=session.stats.episodes_saved,
+            successes=session.stats.successes,
+            tracking=session.stats.live_tracking_rate,
+            fps=session.stats.fps,
+            sensitivity=self.mapper.position_gain,
+            message=session.visible_message,
+            goal_name=alignment.get("goal_name", "cube"),
+            goal_distance=alignment.get("goal_error"),
+            hand_move=alignment.get("hand_move"),
+            saturated=getattr(self.mapper, "saturated", False),
+            rejection=session.stats.live_rejection,
+            holding=alignment.get("holding", False),
+            hands_seen=getattr(tracker, "hands_seen", 0),
+            followed_hand=getattr(tracker, "followed_hand", None),
+            tracked_now=pose is not None,
+            step_limit=self.config.sim.teleop_max_steps,
+            flash=session.flash,
+            loop_ms=self.pacer.average_ms,
+            loop_budget_ms=self.pacer.budget_ms,
+            tracking_history=tuple(session.stats.recent_quality),
+            jaw_gap=None if command is None else float(command.jaw_gap),
+            jaw_range=(self.config.gripper.min_command_gap,
+                       self.config.gripper.max_command_gap),
+            # Measured off the loaded model, not off the robot description: the
+            # scene is the authority on how wide the puck actually is, and the
+            # gauge is only useful if its tick is the real object.
+            object_width=2.0 * self.env.cube_half_extent,
+        )
+        frame = compose(stage, tiles, state, width=self.width, height=self.height,
+                        stage_label=stage_label, help_open=self.show_help)
+        self.pacer.update(elapsed * 1000.0)
+        return frame
+
+
 def run_teleop(
     output: Path | str | None,
     device: int = 0,
     seed: int = 0,
     world_z_sign: float = 1.0,
     config: Config | None = None,
-    sim_view: str = "front_cam",
+    sim_view: str = "chase_cam",
     stereo_device: int | None = None,
     stereo_baseline: float = 0.12,
+    ui: str | int | None = None,
 ) -> TeleopStats:
     """Open the camera, open the simulator, and loop until the operator quits."""
     import cv2
 
     config = config or Config()
+    # Resolve the interface size before anything is opened: a typo in --ui
+    # should not cost the operator a camera permission prompt and a model load.
+    frame_width, frame_height = window_size(ui)
+
     env = PickPlaceEnv(config=config, seed=seed)
     ik = ArmIK(config.ik, config.spec)
     mapper = HandToGripper(config.hand, config.workspace, config.gripper)
@@ -413,22 +911,6 @@ def run_teleop(
         )
 
     session = TeleopSession(env, mapper, ik, config, writer)
-    # "top+front" is the default because neither view alone is enough: the top
-    # view shows horizontal alignment with the cube, which a side view cannot,
-    # and the front view shows height, which a top view cannot.
-    # The top view is always shown -- horizontal alignment is invisible from
-    # any side view. The lower panel defaults to the chase camera, which rides
-    # above and behind the gripper so the arm can never park itself in front of
-    # the lens; "v" swaps it for the fixed views.
-    views = ["chase_cam", "front_cam", "hero_cam", "wrist_cam"]
-    view_index = views.index(sim_view) if sim_view in views else 0
-    #: Render the simulator panel every Nth frame and hold it in between. It is
-    #: for the operator's eyes, not for the policy, and at 30 Hz a fresh render
-    #: every frame would eat a third of the control budget.
-    view_every = 3
-    last_view: tuple[np.ndarray, np.ndarray] | None = None
-    frame_index = 0
-
     episode_seed = seed
     last_time = time.perf_counter()
 
@@ -439,28 +921,42 @@ def run_teleop(
         stereo = StereoRig(stereo_device, stereo_baseline, config.hand)
         print(f"stereo depth on: second camera {stereo_device}, "
               f"baseline {stereo_baseline * 1000:.0f} mm")
+
+    window = "handrobot teleop"
     try:
         with Webcam(device) as camera, HandTracker(
             camera.width, camera.height, config.hand, world_z_sign
         ) as tracker:
+            interface = Interface(
+                config, env, mapper, (camera.width, camera.height), ui=ui, sim_view=sim_view
+            )
+            # A resizable window, because the composed frame can be far larger
+            # than the screen: the interface is drawn at full resolution and the
+            # window shows as much of it as the display can.
+            cv2.namedWindow(window, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+            cv2.resizeWindow(window, *UI_PRESETS["720p"])
+            if (frame_width, frame_height) != UI_PRESETS["720p"]:
+                print(f"interface composed at {frame_width}x{frame_height}; "
+                      "drag the window to any size")
+
             session.new_episode(seed=episode_seed)
             while True:
                 frame = camera.read()
                 if frame is None:
                     break
                 now = time.perf_counter()
-                session.stats.tick(now - last_time)
+                elapsed = now - last_time
+                session.stats.tick(elapsed)
                 last_time = now
                 session.stats.frames_seen += 1
+                session.flash = max(0.0, session.flash - elapsed / FLASH_SECONDS)
 
                 pose, landmarks = tracker.detect(frame)
                 if stereo is not None:
                     pose = stereo.refine(pose, camera.width)
-                if pose is not None:
-                    session.stats.frames_tracked += 1
-                else:
-                    session.stats.note_rejection(tracker.last_rejection)
-                if landmarks is not None and hand_is_clipped(landmarks):
+                clipped = landmarks is not None and hand_is_clipped(landmarks)
+                session.stats.note_frame(pose is not None, tracker.last_rejection, clipped)
+                if clipped:
                     session.stats.frames_clipped += 1
 
                 # The operator panel of the film records the overlay alone, at a
@@ -474,63 +970,17 @@ def run_teleop(
                 goal = (info.get("alignment") or {}).get("goal")
                 env.set_goal_marker(goal if mapper.engaged else None)
 
-                preview = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                draw_hand_overlay(preview, landmarks, pose, engaged=mapper.engaged)
-                if last_view is None or frame_index % view_every == 0:
-                    panel_w, panel_h = _panel_geometry()
-                    last_view = (
-                        cv2.cvtColor(env.render("top_cam", panel_h, panel_w), cv2.COLOR_RGB2BGR),
-                        cv2.cvtColor(
-                            env.render(views[view_index], panel_h, panel_w), cv2.COLOR_RGB2BGR
-                        ),
-                    )
-                frame_index += 1
-
-                alignment = info.get("alignment") or {}
-                tcp = env.gripper_pose[0]
-                top_panel = draw_scene_overlays(last_view[0], env, "top_cam", tcp, goal)
-                # The chase panel keeps only the crosshair: an arrow there sweeps
-                # around as the camera follows the gripper, and the operator
-                # found it distracting rather than helpful.
-                low_panel = draw_scene_overlays(
-                    last_view[1], env, views[view_index], tcp, goal, show_arrow=False
-                )
                 cv2.imshow(
-                    "handrobot teleop",
-                    compose(
-                        preview, top_panel, low_panel,
-                        HudState(
-                            engaged=mapper.engaged,
-                            recording=session.recording,
-                            episode_steps=session.episode_steps,
-                            saved=session.stats.episodes_saved,
-                            successes=session.stats.successes,
-                            tracking=session.stats.tracking_rate,
-                            fps=session.stats.fps,
-                            sensitivity=mapper.position_gain,
-                            message=session.message,
-                            goal_name=alignment.get("goal_name", "cube"),
-                            goal_distance=alignment.get("goal_error"),
-                            hand_move=alignment.get("hand_move"),
-                            saturated=getattr(mapper, "saturated", False),
-                            rejection=(session.stats.top_rejection or (None, 0))[0]
-                            if session.stats.tracking_rate < 0.85 else None,
-                            holding=alignment.get("holding", False),
-                            hands_seen=tracker.hands_seen,
-                            followed_hand=(
-                                {"Left": "right", "Right": "left"}.get(
-                                    tracker._followed.handedness
-                                )
-                                if tracker._followed is not None
-                                else None
-                            ),
-                        ),
-                    ),
+                    window,
+                    interface.render(session, frame, pose, landmarks, info, tracker,
+                                     elapsed, now=now),
                 )
 
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
                     break
+                if interface.handle_key(key, session):
+                    continue
                 if key == ord(" "):
                     if mapper.engaged:
                         session.disengage()
@@ -547,10 +997,6 @@ def run_teleop(
                     session.discard_episode()
                     episode_seed += 1
                     session.new_episode(seed=episode_seed)
-                elif key == ord("v"):
-                    view_index = (view_index + 1) % len(views)
-                    last_view = None
-                    session.message = f"view: {views[view_index]}"
                 elif key in (ord("["), ord("]")):
                     gain = mapper.adjust_gain(-0.2 if key == ord("[") else 0.2)
                     session.message = f"sensitivity {gain:.1f}x"
@@ -568,15 +1014,3 @@ def run_teleop(
         env.close()
 
     return session.stats
-
-
-#: Size of the composed interface window.
-WINDOW_WIDTH = 1280
-WINDOW_HEIGHT = 720
-
-
-def _panel_geometry(width: int = WINDOW_WIDTH, height: int = WINDOW_HEIGHT) -> tuple[int, int]:
-    """Pixel size of each simulator panel, so renders match it exactly."""
-    body = height - STRIP_HEIGHT
-    camera_width = int(width * 0.52)
-    return width - camera_width - GAP, (body - GAP) // 2
